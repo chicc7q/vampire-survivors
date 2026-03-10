@@ -26,12 +26,35 @@ const W = canvas.width  = 800;
 const H = canvas.height = 600;
 
 // ── player image ──────────────────────────────────────────────────────
-const playerImg = new Image();
-playerImg.crossOrigin = 'anonymous'; // needed for GitHub Pages CORS
+// Use an offscreen canvas to pixel-strip white/near-white backgrounds.
+// drawImage with shadowBlur or any residual context state on GitHub Pages
+// CDN can render PNG transparent pixels as white; pixel manipulation is
+// the only 100% reliable fix regardless of CORS or browser quirks.
 let playerImgReady = false;
-playerImg.onload = () => { playerImgReady = true; };
-playerImg.onerror = () => { playerImgReady = false; };
-playerImg.src = 'player.png';
+let playerCanvas = null;
+(function(){
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    const oc = document.createElement('canvas');
+    oc.width = img.width || 128; oc.height = img.height || 128;
+    const octx = oc.getContext('2d');
+    octx.drawImage(img, 0, 0);
+    try {
+      const id = octx.getImageData(0, 0, oc.width, oc.height);
+      const d = id.data;
+      for(let i = 0; i < d.length; i += 4){
+        // erase near-white pixels (all RGB channels > 235)
+        if(d[i]>235 && d[i+1]>235 && d[i+2]>235) d[i+3] = 0;
+      }
+      octx.putImageData(id, 0, 0);
+    } catch(e) { /* CORS may block getImageData; use raw image */ }
+    playerCanvas = oc;
+    playerImgReady = true;
+  };
+  img.onerror = () => { playerImgReady = false; };
+  img.src = 'player.png';
+})();
 
 // ── constants ─────────────────────────────────────────────────────────
 const TOTAL_ROUNDS   = 16;
@@ -104,8 +127,9 @@ const WEAPONS = {
         if(t){ dx=t.x-p.x; dy=t.y-p.y; }
         else { dx=Math.cos(p.facing); dy=Math.sin(p.facing); }
         const n=norm(dx,dy);
+        const wr=clamp(Math.round(5+(w.level-1)*1.2),5,13);
         projectiles.push(new Proj(p.x,p.y, n.x*w.speed,n.y*w.speed,
-          7,'#aa88ff', w.damage, w.pierce,'wand'));
+          wr,'#aa88ff', w.damage, w.pierce,'wand'));
       }
     }
   },
@@ -126,9 +150,10 @@ const WEAPONS = {
       for(let i=0;i<w.count;i++){
         const spread=(i-(w.count-1)/2)*0.18;
         const a=p.facing+spread;
+        const kr=clamp(Math.round(4+(w.level-1)*0.8),4,10);
         projectiles.push(new Proj(p.x,p.y,
           Math.cos(a)*w.speed, Math.sin(a)*w.speed,
-          5,'#ffdd44',w.damage,w.pierce,'knife'));
+          kr,'#ffdd44',w.damage,w.pierce,'knife'));
       }
     }
   },
@@ -204,9 +229,10 @@ const WEAPONS = {
     fire(w,p){
       for(let i=0;i<w.count;i++){
         const a=p.facing+(i-(w.count-1)/2)*0.4;
+        const hr=clamp(Math.round(10+(w.level-1)*1.5),10,18);
         const pj=new Proj(p.x,p.y,
           Math.cos(a)*210,Math.sin(a)*210-160,
-          12,'#9944ee',w.damage,99,'hammer');
+          hr,'#9944ee',w.damage,99,'hammer');
         pj.gravity=320; pj.life=1.6;
         pj.rot=0; pj.rotSpd=8;
         projectiles.push(pj);
@@ -228,9 +254,10 @@ const WEAPONS = {
     fire(w,p){
       for(let i=0;i<4;i++){
         const a=i*Math.PI/2;
+        const cr=clamp(Math.round(6+(w.level-1)*1.2),6,13);
         const pj=new Proj(p.x,p.y,
           Math.cos(a)*w.speed,Math.sin(a)*w.speed,
-          8,'#ff8844',w.damage,w.pierce,'cross');
+          cr,'#ff8844',w.damage,w.pierce,'cross');
         pj.life=1.8;
         projectiles.push(pj);
       }
@@ -269,6 +296,7 @@ class Enemy {
     const rm = 0.8 + (round-1)*0.023;
     // power tier for visuals (0-4)
     this.tier = Math.min(4, Math.floor((round-1)/3));
+    this.ti=ti;
     this.x=x; this.y=y;
     this.r=Math.round(t.r*rm);
     this.hp=Math.ceil(t.hp*sm); this.maxHp=this.hp;
@@ -317,10 +345,151 @@ class Enemy {
       this.contactCd=0.5;
     }
   }
+  // Helper: draw glowing eyes facing direction ed
+  _glowEyes(sx,sy,r,ed,col){
+    const eyeCols=['#ffee00','#ffcc00','#ff8800','#ff2200','#cc00ff'];
+    const c=col||eyeCols[this.tier];
+    const er=r*0.48, eyeR=1.8+this.tier*0.35;
+    ctx.fillStyle=c;
+    ctx.shadowBlur=6; ctx.shadowColor=c;
+    ctx.beginPath();
+    ctx.arc(sx+ed.x*er-ed.y*(r*0.22), sy+ed.y*er+ed.x*(r*0.22), eyeR,0,Math.PI*2);
+    ctx.arc(sx+ed.x*er+ed.y*(r*0.22), sy+ed.y*er-ed.x*(r*0.22), eyeR,0,Math.PI*2);
+    ctx.fill();
+    ctx.shadowBlur=0;
+  }
+  // Zombie: lumpy green blob + stitches + fangs + red eyes
+  _drawZombie(sx,sy,bob,ed){
+    const r=this.r;
+    ctx.fillStyle=this.col;
+    ctx.beginPath();
+    // lumpy blob via bezierCurveTo
+    ctx.ellipse(sx,sy+bob,r,r*1.1,0,0,Math.PI*2);
+    ctx.fill();
+    // stitches
+    ctx.strokeStyle='#1a4a18'; ctx.lineWidth=1.5;
+    for(let i=-1;i<=1;i+=2){
+      ctx.beginPath();
+      ctx.moveTo(sx-r*0.15,sy+bob+r*0.15*i);
+      ctx.lineTo(sx+r*0.15,sy+bob+r*0.15*i);
+      ctx.stroke();
+    }
+    // fangs
+    ctx.fillStyle='#fff';
+    ctx.beginPath(); ctx.moveTo(sx-r*0.2,sy+bob+r*0.35); ctx.lineTo(sx-r*0.12,sy+bob+r*0.5); ctx.lineTo(sx-r*0.04,sy+bob+r*0.35); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(sx+r*0.04,sy+bob+r*0.35); ctx.lineTo(sx+r*0.12,sy+bob+r*0.5); ctx.lineTo(sx+r*0.2,sy+bob+r*0.35); ctx.fill();
+    this._glowEyes(sx,sy+bob,r,ed,'#ff2200');
+  }
+  // Bat: wing arcs + antennae + fang + orange eyes
+  _drawBat(sx,sy,bob,ed){
+    const r=this.r;
+    const flap=Math.sin(this.wobble*2.5)*0.4;
+    ctx.fillStyle=this.col;
+    // left wing
+    ctx.beginPath(); ctx.moveTo(sx,sy+bob);
+    ctx.quadraticCurveTo(sx-r*2,(sy+bob)-r*1.5+flap*r, sx-r*2.2,sy+bob+r*0.4);
+    ctx.quadraticCurveTo(sx-r*1.2,sy+bob+r*0.6, sx,sy+bob+r*0.2);
+    ctx.fill();
+    // right wing
+    ctx.beginPath(); ctx.moveTo(sx,sy+bob);
+    ctx.quadraticCurveTo(sx+r*2,(sy+bob)-r*1.5+flap*r, sx+r*2.2,sy+bob+r*0.4);
+    ctx.quadraticCurveTo(sx+r*1.2,sy+bob+r*0.6, sx,sy+bob+r*0.2);
+    ctx.fill();
+    // body
+    ctx.beginPath(); ctx.ellipse(sx,sy+bob,r*0.7,r,0,0,Math.PI*2); ctx.fill();
+    // antennae
+    ctx.strokeStyle=this.col; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(sx-r*0.2,sy+bob-r*0.8); ctx.lineTo(sx-r*0.5,sy+bob-r*1.5); ctx.lineTo(sx-r*0.35,sy+bob-r*1.6); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx+r*0.2,sy+bob-r*0.8); ctx.lineTo(sx+r*0.5,sy+bob-r*1.5); ctx.lineTo(sx+r*0.35,sy+bob-r*1.6); ctx.stroke();
+    // single fang
+    ctx.fillStyle='#fff';
+    ctx.beginPath(); ctx.moveTo(sx-r*0.08,sy+bob+r*0.3); ctx.lineTo(sx,sy+bob+r*0.5); ctx.lineTo(sx+r*0.08,sy+bob+r*0.3); ctx.fill();
+    this._glowEyes(sx,sy+bob,r*0.7,ed,'#ff8800');
+  }
+  // Skeleton: skull + dark sockets + teeth row + crack
+  _drawSkeleton(sx,sy,bob,ed){
+    const r=this.r;
+    ctx.fillStyle=this.col;
+    // skull
+    ctx.beginPath(); ctx.ellipse(sx,sy+bob-r*0.1,r*0.9,r,0,0,Math.PI*2); ctx.fill();
+    // jaw
+    ctx.beginPath(); ctx.ellipse(sx,sy+bob+r*0.7,r*0.65,r*0.35,0,0,Math.PI*2); ctx.fill();
+    // dark eye sockets
+    ctx.fillStyle='#111';
+    ctx.beginPath(); ctx.ellipse(sx-r*0.32,sy+bob-r*0.1,r*0.22,r*0.28,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(sx+r*0.32,sy+bob-r*0.1,r*0.22,r*0.28,0,0,Math.PI*2); ctx.fill();
+    // red pupils
+    ctx.fillStyle='#ff2200';
+    ctx.beginPath(); ctx.arc(sx-r*0.32+ed.x*r*0.08,sy+bob-r*0.1+ed.y*r*0.08,r*0.1,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(sx+r*0.32+ed.x*r*0.08,sy+bob-r*0.1+ed.y*r*0.08,r*0.1,0,Math.PI*2); ctx.fill();
+    // teeth
+    ctx.fillStyle='#ddd';
+    for(let i=0;i<4;i++){
+      ctx.beginPath(); ctx.rect(sx-r*0.4+i*r*0.25,sy+bob+r*0.45,r*0.18,r*0.22); ctx.fill();
+    }
+    // crack on forehead
+    ctx.strokeStyle='#888'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(sx,sy+bob-r*0.8); ctx.lineTo(sx-r*0.1,sy+bob-r*0.45); ctx.lineTo(sx+r*0.05,sy+bob-r*0.2); ctx.stroke();
+  }
+  // Ogre: large blobby body + horns + claws + angry brow + yellow eyes
+  _drawOgre(sx,sy,bob,ed){
+    const r=this.r;
+    ctx.fillStyle=this.col;
+    // body — wider at bottom
+    ctx.beginPath(); ctx.ellipse(sx,sy+bob+r*0.15,r,r*0.95,0,0,Math.PI*2); ctx.fill();
+    // horns
+    ctx.fillStyle='#885522';
+    ctx.beginPath(); ctx.moveTo(sx-r*0.4,sy+bob-r*0.75); ctx.lineTo(sx-r*0.55,sy+bob-r*1.3); ctx.lineTo(sx-r*0.2,sy+bob-r*0.8); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(sx+r*0.4,sy+bob-r*0.75); ctx.lineTo(sx+r*0.55,sy+bob-r*1.3); ctx.lineTo(sx+r*0.2,sy+bob-r*0.8); ctx.fill();
+    // claws (3 finger stubs at bottom)
+    ctx.fillStyle='#995533';
+    for(let i=-1;i<=1;i++){
+      ctx.beginPath(); ctx.ellipse(sx+i*r*0.35,sy+bob+r*0.95,r*0.14,r*0.22,i*0.25,0,Math.PI*2); ctx.fill();
+    }
+    // angry brow
+    ctx.strokeStyle='#331100'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.moveTo(sx-r*0.5,sy+bob-r*0.15); ctx.lineTo(sx-r*0.15,sy+bob-r*0.3); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx+r*0.5,sy+bob-r*0.15); ctx.lineTo(sx+r*0.15,sy+bob-r*0.3); ctx.stroke();
+    this._glowEyes(sx,sy+bob,r,ed,'#ffcc00');
+  }
+  // Ghost: round translucent body + wispy tail + hollow eyes + blue glow
+  _drawGhost(sx,sy,bob,ed){
+    const r=this.r;
+    const tail=Math.sin(this.wobble)*r*0.3;
+    // blue outer glow
+    const grd=ctx.createRadialGradient(sx,sy+bob,0,sx,sy+bob,r*1.6);
+    grd.addColorStop(0,'rgba(100,180,255,0.18)');
+    grd.addColorStop(1,'rgba(100,180,255,0)');
+    ctx.fillStyle=grd; ctx.beginPath(); ctx.arc(sx,sy+bob,r*1.6,0,Math.PI*2); ctx.fill();
+    // body
+    ctx.globalAlpha=0.78;
+    ctx.fillStyle=this.col;
+    ctx.beginPath(); ctx.ellipse(sx,sy+bob-r*0.1,r*0.9,r,0,0,Math.PI*2); ctx.fill();
+    // wispy tail (away from player direction)
+    const awayX=-ed.x, awayY=-ed.y;
+    ctx.beginPath();
+    ctx.moveTo(sx-r*0.55,sy+bob+r*0.7);
+    ctx.quadraticCurveTo(sx-r*0.7+awayX*r*0.5, sy+bob+r*1.2+awayY*r*0.3+tail, sx-r*0.3+awayX*r*0.7, sy+bob+r*1.5+awayY*r*0.4);
+    ctx.moveTo(sx,sy+bob+r*0.85);
+    ctx.quadraticCurveTo(sx+awayX*r*0.4, sy+bob+r*1.3+awayY*r*0.4+tail*0.6, sx+awayX*r*0.6, sy+bob+r*1.65+awayY*r*0.5);
+    ctx.moveTo(sx+r*0.55,sy+bob+r*0.7);
+    ctx.quadraticCurveTo(sx+r*0.7+awayX*r*0.5, sy+bob+r*1.2+awayY*r*0.3-tail, sx+r*0.3+awayX*r*0.7, sy+bob+r*1.5+awayY*r*0.4);
+    ctx.fill();
+    ctx.globalAlpha=1;
+    // hollow eyes (dark ovals)
+    ctx.fillStyle='rgba(0,0,0,0.85)';
+    ctx.beginPath(); ctx.ellipse(sx-r*0.3,sy+bob-r*0.15,r*0.18,r*0.25,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(sx+r*0.3,sy+bob-r*0.15,r*0.18,r*0.25,0,0,Math.PI*2); ctx.fill();
+    // inner blue glow
+    ctx.fillStyle='rgba(130,210,255,0.7)';
+    ctx.beginPath(); ctx.ellipse(sx-r*0.3,sy+bob-r*0.15,r*0.08,r*0.12,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(sx+r*0.3,sy+bob-r*0.15,r*0.08,r*0.12,0,0,Math.PI*2); ctx.fill();
+  }
   draw(){
     const sx=this.x-camera.x, sy=this.y-camera.y;
-    if(sx<-40||sx>W+40||sy<-40||sy>H+40) return;
+    if(sx<-80||sx>W+80||sy<-80||sy>H+80) return;
     const bob=Math.sin(this.wobble)*2;
+    const ed=norm(player.x-this.x,player.y-this.y);
     ctx.save();
     if(this.hitT>0) ctx.filter='brightness(3) saturate(0)';
     // shadow
@@ -328,35 +497,27 @@ class Enemy {
     ctx.beginPath();
     ctx.ellipse(sx,sy+this.r-1,this.r*.8,this.r*.3,0,0,Math.PI*2);
     ctx.fill();
-    // body
-    ctx.fillStyle=this.col;
-    ctx.beginPath();
-    ctx.arc(sx,sy+bob,this.r,0,Math.PI*2);
-    ctx.fill();
+    // type-specific drawing
+    if(this.ti===0) this._drawZombie(sx,sy,bob,ed);
+    else if(this.ti===1) this._drawBat(sx,sy,bob,ed);
+    else if(this.ti===2) this._drawSkeleton(sx,sy,bob,ed);
+    else if(this.ti===3) this._drawOgre(sx,sy,bob,ed);
+    else this._drawGhost(sx,sy,bob,ed);
     // power-tier glow ring (tier 2+)
     if(this.tier>=2){
       const ringCols=['','','rgba(255,140,0,0.45)','rgba(255,40,0,0.55)','rgba(180,0,255,0.65)'];
+      ctx.filter='none';
       ctx.strokeStyle=ringCols[this.tier];
       ctx.lineWidth=2+this.tier;
       ctx.shadowBlur=10+this.tier*4; ctx.shadowColor=ringCols[this.tier];
-      ctx.beginPath(); ctx.arc(sx,sy+bob,this.r+3,0,Math.PI*2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(sx,sy+bob,this.r+4,0,Math.PI*2); ctx.stroke();
       ctx.shadowBlur=0;
     }
-    // eyes — yellow in tier 0-1, orange tier 2, red tier 3-4
-    const eyeCols=['#ffee00','#ffcc00','#ff8800','#ff2200','#cc00ff'];
-    const ed=norm(player.x-this.x,player.y-this.y);
-    ctx.fillStyle=eyeCols[this.tier];
-    const er=this.r*0.5;
-    const eyeR=1.8+this.tier*0.4;
-    ctx.beginPath();
-    ctx.arc(sx+ed.x*er-ed.y*3, sy+bob+ed.y*er+ed.x*3, eyeR,0,Math.PI*2);
-    ctx.arc(sx+ed.x*er+ed.y*3, sy+bob+ed.y*er-ed.x*3, eyeR,0,Math.PI*2);
-    ctx.fill();
     ctx.restore();
     // hp bar
     if(this.hp<this.maxHp){
       const bw=this.r*2.5, bh=4;
-      const bx=sx-bw/2, by=sy-this.r-10;
+      const bx=sx-bw/2, by=sy-this.r-14;
       ctx.fillStyle='#333'; ctx.fillRect(bx,by,bw,bh);
       ctx.fillStyle='#ff3344'; ctx.fillRect(bx,by,bw*(this.hp/this.maxHp),bh);
     }
@@ -690,7 +851,7 @@ class Player {
   draw(){
     if(this.flickT>0&&Math.floor(this.flickT*10)%2===0) return;
     const sx=this.x-camera.x, sy=this.y-camera.y;
-    const size=this.r*2.5; // display size of the player image
+    const size=this.r*1.6; // display size of the player image
     ctx.save();
     // shadow
     ctx.fillStyle='rgba(0,0,0,0.35)';
@@ -717,9 +878,9 @@ class Player {
       if(Math.cos(this.facing)<0){
         ctx.translate(sx,sy);
         ctx.scale(-1,1);
-        ctx.drawImage(playerImg,-size/2,-size/2,size,size);
+        ctx.drawImage(playerCanvas,-size/2,-size/2,size,size);
       } else {
-        ctx.drawImage(playerImg, sx-size/2, sy-size/2, size, size);
+        ctx.drawImage(playerCanvas, sx-size/2, sy-size/2, size, size);
       }
     } else {
       ctx.shadowBlur=15; ctx.shadowColor='#e94560';
