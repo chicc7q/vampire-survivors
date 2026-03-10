@@ -2,7 +2,7 @@
 <html lang="zh">
 <head>
 <meta charset="UTF-8">
-<title>魔女贝拉之旅</title>
+<title>Souler 魔法特遣队</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -22,45 +22,8 @@ canvas { display: block; cursor: default; }
 <script>
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
-const W = canvas.width  = 800;
-const H = canvas.height = 600;
-
-// ── player image ──────────────────────────────────────────────────────
-// Use an offscreen canvas to pixel-strip white/near-white backgrounds.
-// drawImage with shadowBlur or any residual context state on GitHub Pages
-// CDN can render PNG transparent pixels as white; pixel manipulation is
-// the only 100% reliable fix regardless of CORS or browser quirks.
-let playerImgReady = false;
-let playerCanvas = null;
-(function(){
-  const img = new Image();
-  img.crossOrigin = 'anonymous';
-  img.onload = () => {
-    const oc = document.createElement('canvas');
-    oc.width = img.width || 128; oc.height = img.height || 128;
-    const octx = oc.getContext('2d');
-    octx.drawImage(img, 0, 0);
-    try {
-      const id = octx.getImageData(0, 0, oc.width, oc.height);
-      const d = id.data;
-      for(let i = 0; i < d.length; i += 4){
-        // erase near-white pixels (all RGB channels > 235)
-        if(d[i]>235 && d[i+1]>235 && d[i+2]>235) d[i+3] = 0;
-      }
-      octx.putImageData(id, 0, 0);
-    } catch(e) { /* CORS may block getImageData; use raw image */ }
-    playerCanvas = oc;
-    playerImgReady = true;
-  };
-  img.onerror = () => { playerImgReady = false; };
-  img.src = 'player.png';
-})();
-
-// ── constants ─────────────────────────────────────────────────────────
-const TOTAL_ROUNDS   = 16;
-const ROUND_DURATION = 40; // seconds per round
-const MAP_HW = 1400;  // map half-width  (total 2800px)
-const MAP_HH = 1100;  // map half-height (total 2200px)
+const W = canvas.width  = 900;
+const H = canvas.height = 640;
 
 // ── helpers ──────────────────────────────────────────────────────────
 const rand   = (a,b) => Math.random()*(b-a)+a;
@@ -71,14 +34,364 @@ const lerp   = (a,b,t) => a+(b-a)*t;
 const clamp  = (v,a,b) => Math.max(a,Math.min(b,v));
 function shuffle(arr){for(let i=arr.length-1;i>0;i--){const j=randInt(0,i);[arr[i],arr[j]]=[arr[j],arr[i]];} return arr;}
 
-// ── input ─────────────────────────────────────────────────────────────
+// ── image loading (strip black background) ───────────────────────────
+const charImages = {};
+const charImgFiles = {
+  xiaoxiaoyu:'xiaoxiaoyu.PNG', zhimoushi:'zhimoushi.PNG',
+  yixiaoze:'yixiaoze.PNG', guanyiyi:'guanyiyi.PNG', nianrenbao:'nianrenbao.PNG'
+};
+function loadCharImg(key,src){
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    const oc = document.createElement('canvas');
+    oc.width = img.width||128; oc.height = img.height||128;
+    const octx = oc.getContext('2d');
+    octx.drawImage(img,0,0);
+    try {
+      const id = octx.getImageData(0,0,oc.width,oc.height);
+      const d = id.data;
+      for(let i=0;i<d.length;i+=4){
+        if(d[i]<25 && d[i+1]<25 && d[i+2]<25) d[i+3]=0;
+      }
+      octx.putImageData(id,0,0);
+    } catch(e){}
+    charImages[key] = oc;
+  };
+  img.src = src;
+}
+for(const [k,v] of Object.entries(charImgFiles)) loadCharImg(k,v);
+
+// ── save / load ──────────────────────────────────────────────────────
+function loadSave(){
+  try {
+    const s = JSON.parse(localStorage.getItem('souler_save'));
+    if(s) return s;
+  } catch(e){}
+  return { unlockedChars:['xiaoxiaoyu'], clearedMaps:[], crystals:0 };
+}
+function writeSave(s){ localStorage.setItem('souler_save', JSON.stringify(s)); }
+let save = loadSave();
+
+// ── constants ────────────────────────────────────────────────────────
+const MAP_HW = 1400, MAP_HH = 1100;
+
+// ── character definitions ────────────────────────────────────────────
+const CHARACTERS = {
+  xiaoxiaoyu: {
+    name:'小小屿', cls:'霸道魔使', imgKey:'xiaoxiaoyu',
+    desc:'攻击力最高', hp:90, speed:145, startSkill:'star_impact',
+    glowCol:'#ff4466',
+    unlockMap: -1, // always unlocked
+  },
+  zhimoushi: {
+    name:'知某时', cls:'观星执事', imgKey:'zhimoushi',
+    desc:'控场最强', hp:100, speed:140, startSkill:'star_orbit',
+    glowCol:'#44aaff',
+    unlockMap: 0,
+  },
+  yixiaoze: {
+    name:'亦小泽', cls:'破晓球手', imgKey:'yixiaoze',
+    desc:'速度最快', hp:80, speed:185, startSkill:'dawn_rush',
+    glowCol:'#ffaa22',
+    unlockMap: 1,
+  },
+  guanyiyi: {
+    name:'观一一', cls:'秘酿酒师', imgKey:'guanyiyi',
+    desc:'持续毒伤最高', hp:95, speed:148, startSkill:'brew_bottle',
+    glowCol:'#44ff66',
+    unlockMap: 2,
+  },
+  nianrenbao: {
+    name:'粘人包', cls:'净愈医师', imgKey:'nianrenbao',
+    desc:'生存能力最强', hp:130, speed:135, startSkill:'pure_light',
+    glowCol:'#ffddaa',
+    unlockMap: 3,
+  },
+};
+
+// ── map definitions ──────────────────────────────────────────────────
+const MAPS = [
+  { name:'翠绿平原', bgCol:'#1a2e1a', gridCol:'rgba(80,160,80,0.06)', wallCol:'#44cc44',
+    mechanic:'none', bossName:'草原巨蜥王', bossCol:'#338822',
+    duration:180, crystals:100 },
+  { name:'幽暗矿洞', bgCol:'#1a1a1a', gridCol:'rgba(120,120,120,0.06)', wallCol:'#888888',
+    mechanic:'minecart', bossName:'矿石魔像', bossCol:'#777744',
+    duration:180, crystals:100 },
+  { name:'熔岩火山', bgCol:'#2a0a00', gridCol:'rgba(255,80,0,0.05)', wallCol:'#ff4400',
+    mechanic:'fire', bossName:'熔岩领主', bossCol:'#cc4400',
+    duration:180, crystals:100 },
+  { name:'冰雪荒原', bgCol:'#0e1a2a', gridCol:'rgba(150,200,255,0.06)', wallCol:'#88ccff',
+    mechanic:'ice', bossName:'霜冻女王', bossCol:'#44aaee',
+    duration:180, crystals:100 },
+  { name:'古老教堂', bgCol:'#1a0a2a', gridCol:'rgba(160,80,200,0.05)', wallCol:'#aa44dd',
+    mechanic:'holylight', bossName:'堕落祭司', bossCol:'#8822aa',
+    duration:180, crystals:200 },
+  { name:'深海水晶城', bgCol:'#0a1a2a', gridCol:'rgba(60,180,180,0.06)', wallCol:'#22aaaa',
+    mechanic:'current', bossName:'深渊鲸鱼王', bossCol:'#2266aa',
+    duration:600, crystals:200, twoBoss:true, boss2Name:'深渊巨鲸', boss2Time:300 },
+  { name:'云端钟楼', bgCol:'#1a2030', gridCol:'rgba(150,180,220,0.06)', wallCol:'#aaccee',
+    mechanic:'timestop', bossName:'齿轮守卫者', bossCol:'#8899aa',
+    duration:600, crystals:200, twoBoss:true, boss2Name:'钟楼之心', boss2Time:300 },
+  { name:'暗影镜像界', bgCol:'#0a0a0a', gridCol:'rgba(255,255,255,0.04)', wallCol:'#ffffff',
+    mechanic:'mirror', bossName:'镜中恶魔', bossCol:'#aa00aa',
+    duration:600, crystals:500, twoBoss:true, boss2Name:'终极镜魔', boss2Time:300 },
+];
+
+// ── skill definitions ────────────────────────────────────────────────
+// Each skill has: name, desc, color, icon, maxStack(3), fire/passive fn, per-stack scaling
+const SKILLS = {
+  // ─ 小小屿 ─
+  star_impact: {
+    name:'星陨冲击', icon:'★', color:'#ff4466', desc:'向最近敌人发射高伤星弹',
+    type:'active', cooldown:1.0,
+    fire(w,p,stk){
+      const targets=nearestEnemies(p.x,p.y,1+stk);
+      const dmg=35+stk*20, spd=320+stk*30, r=8+stk*2;
+      for(let i=0;i<targets.length;i++){
+        const t=targets[i]; if(!t) break;
+        const n=norm(t.x-p.x,t.y-p.y);
+        projectiles.push(new Proj(p.x,p.y,n.x*spd,n.y*spd,r,'#ff4466',dmg,0,'star'));
+      }
+    }
+  },
+  meteor_rain: {
+    name:'流星雨', icon:'☄', color:'#ff8844', desc:'随机位置降下流星',
+    type:'active', cooldown:2.2,
+    fire(w,p,stk){
+      const cnt=2+stk*2, dmg=22+stk*12;
+      for(let i=0;i<cnt;i++){
+        const tx=p.x+rand(-200,200), ty=p.y+rand(-200,200);
+        const pj=new Proj(tx,ty-300,0,350,10+stk*2,'#ff6622',dmg,99,'meteor');
+        pj.life=1.2; projectiles.push(pj);
+      }
+    }
+  },
+  star_fury: {
+    name:'星怒', icon:'⚡', color:'#ffaa00', desc:'被动增加全伤害15%每层',
+    type:'passive',
+    onApply(p,stk){ p.dmgMult*=1.15; for(const w of p.weapons) w._dmgBonus=(w._dmgBonus||0)+0.15; }
+  },
+  star_burst: {
+    name:'爆裂星核', icon:'◉', color:'#ff2200', desc:'发射爆炸弹，命中后范围伤害',
+    type:'active', cooldown:1.8,
+    fire(w,p,stk){
+      const n=norm(Math.cos(p.facing),Math.sin(p.facing));
+      const dmg=30+stk*18, spd=250;
+      const pj=new Proj(p.x,p.y,n.x*spd,n.y*spd,10+stk*2,'#ff3300',dmg,0,'explode');
+      pj.life=1.2; pj.stk=stk; projectiles.push(pj);
+    }
+  },
+  // ─ 知某时 ─
+  star_orbit: {
+    name:'星轨预判', icon:'◎', color:'#44aaff', desc:'发射弧形减速弹',
+    type:'active', cooldown:1.3,
+    fire(w,p,stk){
+      const targets=nearestEnemies(p.x,p.y,1+stk);
+      const dmg=18+stk*10, spd=220+stk*20;
+      for(const t of targets){
+        if(!t) break;
+        const n=norm(t.x-p.x,t.y-p.y);
+        const pj=new Proj(p.x,p.y,n.x*spd+n.y*60,n.y*spd-n.x*60,7+stk,'#44aaff',dmg,1,'arc');
+        pj.slow=0.4+stk*0.1; pj.life=1.5; projectiles.push(pj);
+      }
+    }
+  },
+  gravity_field: {
+    name:'引力场', icon:'◉', color:'#6688ff', desc:'周围敌人减速并受伤',
+    type:'active', cooldown:0.6,
+    fire(w,p,stk){
+      const radius=90+stk*25, dmg=8+stk*5;
+      for(const e of enemies){
+        if(e.dead) continue;
+        if(dist(p,e)<radius+e.r){
+          e.takeDamage(dmg); e.spd*=0.85;
+        }
+      }
+    }
+  },
+  star_chain: {
+    name:'星链束缚', icon:'⛓', color:'#8866ff', desc:'闪电链攻击多个敌人',
+    type:'active', cooldown:1.0,
+    fire(w,p,stk){
+      const pool=enemies.filter(e=>dist(p,e)<300&&!e.dead); shuffle(pool);
+      const dmg=25+stk*15;
+      for(let i=0;i<1+stk;i++){
+        const t=pool[i]; if(!t) break;
+        t.takeDamage(dmg);
+        lightningFX.push({x1:p.x,y1:p.y,x2:t.x,y2:t.y,t:.18});
+      }
+    }
+  },
+  star_shield: {
+    name:'星盾', icon:'🛡', color:'#aaddff', desc:'被动减伤12%每层',
+    type:'passive',
+    onApply(p,stk){ p.defense+=0.12; }
+  },
+  // ─ 亦小泽 ─
+  dawn_rush: {
+    name:'破晓快攻', icon:'⚔', color:'#ffaa22', desc:'向前冲刺并造成爆炸伤害',
+    type:'active', cooldown:1.5,
+    fire(w,p,stk){
+      const n=norm(Math.cos(p.facing),Math.sin(p.facing));
+      const dashDist=80+stk*30, dmg=28+stk*16;
+      p.x+=n.x*dashDist; p.y+=n.y*dashDist;
+      p.x=clamp(p.x,-MAP_HW+p.r,MAP_HW-p.r);
+      p.y=clamp(p.y,-MAP_HH+p.r,MAP_HH-p.r);
+      for(const e of enemies){
+        if(e.dead||dist(p,e)>90+stk*15) continue;
+        e.takeDamage(dmg);
+        const kn=norm(e.x-p.x,e.y-p.y);
+        e.x+=kn.x*50; e.y+=kn.y*50;
+      }
+      spawnParticles(p.x,p.y,'#ffaa22',10);
+    }
+  },
+  whirlwind: {
+    name:'旋风突击', icon:'🌀', color:'#ffcc00', desc:'周围旋转伤害',
+    type:'active', cooldown:0.5,
+    fire(w,p,stk){
+      const radius=70+stk*20, dmg=10+stk*6;
+      for(const e of enemies){
+        if(e.dead||dist(p,e)>radius+e.r) continue;
+        e.takeDamage(dmg);
+        const kn=norm(e.x-p.x,e.y-p.y);
+        e.x+=kn.x*30; e.y+=kn.y*30;
+      }
+    }
+  },
+  flash_bomb: {
+    name:'闪光弹', icon:'💥', color:'#ffee44', desc:'投掷闪光弹造成范围伤害',
+    type:'active', cooldown:2.0,
+    fire(w,p,stk){
+      const targets=nearestEnemies(p.x,p.y,1);
+      if(!targets[0]) return;
+      const t=targets[0], dmg=35+stk*20;
+      for(const e of enemies){
+        if(e.dead||dist(t,e)>80+stk*15) continue;
+        e.takeDamage(dmg);
+      }
+      spawnParticles(t.x,t.y,'#ffee44',12);
+    }
+  },
+  extreme_speed: {
+    name:'极速', icon:'⚡', color:'#ffdd00', desc:'被动提升移动速度18%每层',
+    type:'passive',
+    onApply(p,stk){ p.speed*=1.18; }
+  },
+  // ─ 观一一 ─
+  brew_bottle: {
+    name:'秘酿飞瓶', icon:'🧪', color:'#44ff66', desc:'投掷毒瓶造成范围中毒',
+    type:'active', cooldown:1.4,
+    fire(w,p,stk){
+      const targets=nearestEnemies(p.x,p.y,1+Math.floor(stk/2));
+      const dmg=15+stk*8, spd=260;
+      for(const t of targets){
+        if(!t) break;
+        const n=norm(t.x-p.x,t.y-p.y);
+        const pj=new Proj(p.x,p.y,n.x*spd,n.y*spd,9+stk*2,'#44ff66',dmg,0,'poison');
+        pj.life=1.4; pj.stk=stk; projectiles.push(pj);
+      }
+    }
+  },
+  poison_mist: {
+    name:'毒雾弥漫', icon:'☁', color:'#22cc44', desc:'周围持续毒伤',
+    type:'active', cooldown:0.5,
+    fire(w,p,stk){
+      const radius=80+stk*20, dmg=6+stk*4;
+      for(const e of enemies){
+        if(e.dead||dist(p,e)>radius+e.r) continue;
+        e.takeDamage(dmg); e.poisonT=2+stk;
+      }
+    }
+  },
+  corrosive: {
+    name:'腐蚀涂层', icon:'☣', color:'#88ff44', desc:'所有攻击附带毒DOT',
+    type:'passive',
+    onApply(p,stk){ p.poisonDmg=(p.poisonDmg||0)+4+stk*3; }
+  },
+  toxic_boost: {
+    name:'剧毒强化', icon:'☠', color:'#00cc22', desc:'被动提升全伤害12%每层',
+    type:'passive',
+    onApply(p,stk){ p.dmgMult*=1.12; }
+  },
+  // ─ 粘人包 ─
+  pure_light: {
+    name:'净光注射', icon:'✚', color:'#ffddaa', desc:'攻击敌人同时回血',
+    type:'active', cooldown:1.1,
+    fire(w,p,stk){
+      const targets=nearestEnemies(p.x,p.y,1+stk);
+      const dmg=20+stk*10, spd=280, heal=3+stk*2;
+      for(const t of targets){
+        if(!t) break;
+        const n=norm(t.x-p.x,t.y-p.y);
+        projectiles.push(new Proj(p.x,p.y,n.x*spd,n.y*spd,7+stk,'#ffddaa',dmg,0,'heal'));
+        p.hp=Math.min(p.hp+heal,p.maxHp);
+      }
+    }
+  },
+  healing_aura: {
+    name:'治愈光环', icon:'♥', color:'#ff88aa', desc:'被动每秒回血',
+    type:'passive',
+    onApply(p,stk){ p.regenPerSec=(p.regenPerSec||0)+2+stk*1.5; }
+  },
+  life_link: {
+    name:'生命链接', icon:'♡', color:'#ffaacc', desc:'击杀回血5每层',
+    type:'passive',
+    onApply(p,stk){ p.healOnKill=(p.healOnKill||0)+5; }
+  },
+  holy_burst: {
+    name:'圣光爆发', icon:'✦', color:'#ffffaa', desc:'范围伤害+全体回血',
+    type:'active', cooldown:2.5,
+    fire(w,p,stk){
+      const radius=110+stk*30, dmg=25+stk*15;
+      for(const e of enemies){
+        if(e.dead||dist(p,e)>radius+e.r) continue;
+        e.takeDamage(dmg);
+      }
+      p.hp=Math.min(p.hp+8+stk*5,p.maxHp);
+      spawnParticles(p.x,p.y,'#ffffaa',14);
+    }
+  },
+};
+
+// skill pools per character
+const CHAR_SKILL_POOLS = {
+  xiaoxiaoyu: ['star_impact','meteor_rain','star_fury','star_burst'],
+  zhimoushi:  ['star_orbit','gravity_field','star_chain','star_shield'],
+  yixiaoze:   ['dawn_rush','whirlwind','flash_bomb','extreme_speed'],
+  guanyiyi:   ['brew_bottle','poison_mist','corrosive','toxic_boost'],
+  nianrenbao: ['pure_light','healing_aura','life_link','holy_burst'],
+};
+
+// ── stat upgrades (shared) ───────────────────────────────────────────
+const STAT_UPS = [
+  {name:'强壮体魄',icon:'H',desc:'最大HP+30,恢复30HP',f:p=>{p.maxHp+=30;p.hp=Math.min(p.hp+30,p.maxHp);}},
+  {name:'疾风步法',icon:'S',desc:'移动速度+15%',f:p=>p.speed*=1.15},
+  {name:'急速冷却',icon:'T',desc:'全技能冷却-12%',f:p=>p.cdMult*=0.88},
+  {name:'磁力光环',icon:'M',desc:'拾取范围+35%',f:p=>p.pickup*=1.35},
+  {name:'急救恢复',icon:'R',desc:'立即恢复50HP',f:p=>p.hp=Math.min(p.hp+50,p.maxHp)},
+  {name:'铁皮护甲',icon:'D',desc:'受伤减少15%',f:p=>p.defense+=0.15},
+];
+
+// ── enemy types ──────────────────────────────────────────────────────
+const ETYPES = [
+  {n:'史莱姆', r:12, hp:25,  spd:55,  dmg:10, col:'#4a9040', xp:2, sc:10},
+  {n:'蝙蝠',   r:10, hp:16,  spd:105, dmg:8,  col:'#7b2d8b', xp:2, sc:15},
+  {n:'骷髅',   r:13, hp:50,  spd:65,  dmg:14, col:'#cccccc', xp:4, sc:25},
+  {n:'魔狼',   r:15, hp:70,  spd:85,  dmg:16, col:'#5544aa', xp:4, sc:30},
+  {n:'食人魔', r:22, hp:200, spd:38,  dmg:26, col:'#aa4422', xp:8, sc:60},
+  {n:'鬼魂',   r:11, hp:35,  spd:80,  dmg:10, col:'#88aaff', xp:3, sc:20},
+];
+
+// ── input ────────────────────────────────────────────────────────────
 const keys = {};
-let   mouse = {x:0,y:0};
+let mouse = {x:0,y:0};
 document.addEventListener('keydown', e=>{
   keys[e.key]=true;
-  if(state==='title'   &&e.key===' ') startGame();
-  if(state==='gameover'&&e.key===' ') startGame();
-  if(state==='victory' &&e.key===' ') startGame();
+  if(e.key===' '){
+    if(state==='title') state='charselect';
+  }
 });
 document.addEventListener('keyup', e=>keys[e.key]=false);
 canvas.addEventListener('mousemove', e=>{
@@ -88,242 +401,49 @@ canvas.addEventListener('mousemove', e=>{
 canvas.addEventListener('click', e=>{
   const r=canvas.getBoundingClientRect();
   const mx=e.clientX-r.left, my=e.clientY-r.top;
-  if(state==='title'   ) { startGame(); return; }
-  if(state==='gameover') { startGame(); return; }
-  if(state==='victory' ) { startGame(); return; }
-  if(state==='levelup' ) { handleLevelUpClick(mx,my); }
+  if(state==='title'){ state='charselect'; return; }
+  if(state==='charselect'){ handleCharSelectClick(mx,my); return; }
+  if(state==='mapselect'){ handleMapSelectClick(mx,my); return; }
+  if(state==='levelup'){ handleLevelUpClick(mx,my); return; }
+  if(state==='gameover'||state==='victory'){ state='charselect'; return; }
 });
 
-// ── game state ────────────────────────────────────────────────────────
-let state; // 'title'|'playing'|'levelup'|'gameover'|'victory'
+// ── game state ───────────────────────────────────────────────────────
+let state='title';
+let selectedCharKey=null, selectedMapIdx=0;
 let player, camera, enemies, projectiles, gems, particles;
 let damageNums, lightningFX;
 let gameTime, score, spawnTimer;
-let currentRound, roundTimer, roundBanner; // round system
-let upgradeChoices = [];
-let lastTime = 0;
+let upgradeChoices=[];
+let lastTime=0;
+let mapHazards={}; // map-specific hazard state
+let bossSpawned=false, boss2Spawned=false;
+let sessionCrystals=0;
 
-// ── weapon definitions ────────────────────────────────────────────────
-const WEAPONS = {
-  wand: {
-    name:'魔法棒', icon:'W',
-    desc:'向最近敌人发射魔法弹',
-    color:'#aa88ff',
-    base:{ cooldown:1.2, damage:22, speed:300, pierce:0, count:1 },
-    ups:[
-      {d:'伤害+25%',  f:w=>w.damage*=1.25},
-      {d:'冷却-15%',  f:w=>w.cooldown*=0.85},
-      {d:'穿透+1',    f:w=>w.pierce+=1},
-      {d:'子弹+1',    f:w=>w.count+=1},
-      {d:'速度+20%',  f:w=>w.speed*=1.2},
-      {d:'伤害+35%',  f:w=>w.damage*=1.35},
-      {d:'冷却-20%',  f:w=>w.cooldown*=0.8},
-    ],
-    fire(w,p){
-      const targets = nearestEnemies(p.x,p.y,w.count);
-      for(let i=0;i<w.count;i++){
-        const t = targets[i];
-        let dx,dy;
-        if(t){ dx=t.x-p.x; dy=t.y-p.y; }
-        else { dx=Math.cos(p.facing); dy=Math.sin(p.facing); }
-        const n=norm(dx,dy);
-        const wr=clamp(Math.round(5+(w.level-1)*1.2),5,13);
-        projectiles.push(new Proj(p.x,p.y, n.x*w.speed,n.y*w.speed,
-          wr,'#aa88ff', w.damage, w.pierce,'wand'));
-      }
-    }
-  },
-  knife:{
-    name:'飞刀', icon:'K',
-    desc:'快速向前方投掷飞刀',
-    color:'#ffdd44',
-    base:{ cooldown:0.45, damage:14, speed:440, pierce:1, count:1 },
-    ups:[
-      {d:'伤害+20%',  f:w=>w.damage*=1.2},
-      {d:'冷却-10%',  f:w=>w.cooldown*=0.9},
-      {d:'子弹+1',    f:w=>w.count+=1},
-      {d:'穿透+2',    f:w=>w.pierce+=2},
-      {d:'速度+30%',  f:w=>w.speed*=1.3},
-      {d:'伤害+30%',  f:w=>w.damage*=1.3},
-    ],
-    fire(w,p){
-      for(let i=0;i<w.count;i++){
-        const spread=(i-(w.count-1)/2)*0.18;
-        const a=p.facing+spread;
-        const kr=clamp(Math.round(4+(w.level-1)*0.8),4,10);
-        projectiles.push(new Proj(p.x,p.y,
-          Math.cos(a)*w.speed, Math.sin(a)*w.speed,
-          kr,'#ffdd44',w.damage,w.pierce,'knife'));
-      }
-    }
-  },
-  garlic:{
-    name:'大蒜', icon:'G',
-    desc:'持续伤害周围敌人',
-    color:'#ffff88',
-    base:{ cooldown:0.5, damage:9, radius:80, kb:70 },
-    ups:[
-      {d:'范围+15%',  f:w=>w.radius*=1.15},
-      {d:'伤害+25%',  f:w=>w.damage*=1.25},
-      {d:'范围+20%',  f:w=>w.radius*=1.2},
-      {d:'击退+50%',  f:w=>w.kb*=1.5},
-      {d:'伤害+30%',  f:w=>w.damage*=1.3},
-      {d:'范围+25%',  f:w=>w.radius*=1.25},
-    ],
-    fire(w,p){
-      w._pulse=0.2;
-      for(let i=enemies.length-1;i>=0;i--){
-        const e=enemies[i];
-        if(dist(p,e)<w.radius+e.r){
-          e.takeDamage(w.damage);
-          const kn=norm(e.x-p.x, e.y-p.y);
-          e.x+=kn.x*w.kb*0.15; e.y+=kn.y*w.kb*0.15;
-        }
-      }
-    }
-  },
-  lightning:{
-    name:'闪电环', icon:'L',
-    desc:'对随机敌人释放闪电',
-    color:'#88aaff',
-    base:{ cooldown:0.85, damage:38, count:1, chain:0 },
-    ups:[
-      {d:'次数+1',    f:w=>w.count+=1},
-      {d:'伤害+25%',  f:w=>w.damage*=1.25},
-      {d:'连锁+1',    f:w=>w.chain+=1},
-      {d:'冷却-15%',  f:w=>w.cooldown*=0.85},
-      {d:'伤害+30%',  f:w=>w.damage*=1.3},
-      {d:'次数+1',    f:w=>w.count+=1},
-    ],
-    fire(w,p){
-      const pool=enemies.filter(e=>dist(p,e)<350&&!e.dead);
-      shuffle(pool);
-      for(let i=0;i<w.count;i++){
-        const t=pool[i]; if(!t) break;
-        t.takeDamage(w.damage);
-        lightningFX.push({x1:p.x,y1:p.y,x2:t.x,y2:t.y,t:.18});
-        let prev=t;
-        for(let c=0;c<w.chain;c++){
-          const nx=nearestEnemy(prev.x,prev.y,130,prev);
-          if(!nx) break;
-          nx.takeDamage(w.damage*0.55);
-          lightningFX.push({x1:prev.x,y1:prev.y,x2:nx.x,y2:nx.y,t:.12});
-          prev=nx;
-        }
-      }
-    }
-  },
-  hammer:{
-    name:'牛牛锤子', icon:'锤',
-    desc:'投掷旋转大锤弧线飞行，砸到敌人伤害极高',
-    color:'#9944ee',
-    base:{ cooldown:1.6, damage:65, count:1 },
-    ups:[
-      {d:'伤害+30%',  f:w=>w.damage*=1.3},
-      {d:'锤子+1',    f:w=>w.count+=1},
-      {d:'冷却-20%',  f:w=>w.cooldown*=0.8},
-      {d:'伤害+40%',  f:w=>w.damage*=1.4},
-      {d:'锤子+1',    f:w=>w.count+=1},
-      {d:'冷却-15%',  f:w=>w.cooldown*=0.85},
-    ],
-    fire(w,p){
-      for(let i=0;i<w.count;i++){
-        const a=p.facing+(i-(w.count-1)/2)*0.4;
-        const hr=clamp(Math.round(10+(w.level-1)*1.5),10,18);
-        const pj=new Proj(p.x,p.y,
-          Math.cos(a)*210,Math.sin(a)*210-160,
-          hr,'#9944ee',w.damage,99,'hammer');
-        pj.gravity=320; pj.life=1.6;
-        pj.rot=0; pj.rotSpd=8;
-        projectiles.push(pj);
-      }
-    }
-  },
-  cross:{
-    name:'十字飞镖', icon:'C',
-    desc:'向四周发射穿透飞镖',
-    color:'#ff8844',
-    base:{ cooldown:1.4, damage:28, speed:220, pierce:99 },
-    ups:[
-      {d:'伤害+20%',  f:w=>w.damage*=1.2},
-      {d:'速度+25%',  f:w=>w.speed*=1.25},
-      {d:'冷却-20%',  f:w=>w.cooldown*=0.8},
-      {d:'伤害+30%',  f:w=>w.damage*=1.3},
-      {d:'冷却-15%',  f:w=>w.cooldown*=0.85},
-    ],
-    fire(w,p){
-      for(let i=0;i<4;i++){
-        const a=i*Math.PI/2;
-        const cr=clamp(Math.round(6+(w.level-1)*1.2),6,13);
-        const pj=new Proj(p.x,p.y,
-          Math.cos(a)*w.speed,Math.sin(a)*w.speed,
-          cr,'#ff8844',w.damage,w.pierce,'cross');
-        pj.life=1.8;
-        projectiles.push(pj);
-      }
-    }
-  }
-};
-
-// ── stat upgrades ─────────────────────────────────────────────────────
-const STAT_UPS = [
-  {name:'强壮体魄', icon:'H', desc:'最大HP+30,恢复30HP', f:p=>{p.maxHp+=30;p.hp=Math.min(p.hp+30,p.maxHp);}},
-  {name:'疾风步法', icon:'S', desc:'移动速度+20%',        f:p=>p.speed*=1.2},
-  {name:'急速冷却', icon:'T', desc:'全武器冷却-15%',      f:p=>p.cdMult*=0.85},
-  {name:'力量之源', icon:'P', desc:'全武器伤害+15%',      f:p=>{p.dmgMult*=1.15;for(const w of p.weapons)w.damage*=1.15;}},
-  {name:'磁力光环', icon:'M', desc:'拾取范围+40%',        f:p=>p.pickup*=1.4},
-  {name:'急救恢复', icon:'R', desc:'立即恢复50HP',        f:p=>p.hp=Math.min(p.hp+50,p.maxHp)},
-  {name:'铁皮护甲', icon:'D', desc:'受到伤害-20%',        f:p=>p.defense+=0.2},
-];
-
-// ── enemy types ───────────────────────────────────────────────────────
-// xp values are intentionally generous for faster leveling
-const ETYPES = [
-  {n:'僵尸',  r:14, hp:30,  spd:55,  dmg:12, col:'#4a9040', xp:2, sc:10},
-  {n:'蝙蝠',  r:10, hp:16,  spd:105, dmg:8,  col:'#7b2d8b', xp:2, sc:15},
-  {n:'骷髅',  r:13, hp:55,  spd:68,  dmg:15, col:'#cccccc', xp:4, sc:25},
-  {n:'食人魔',r:24, hp:220, spd:38,  dmg:28, col:'#aa4422', xp:8, sc:60},
-  {n:'鬼魂',  r:12, hp:40,  spd:80,  dmg:10, col:'#88aaff', xp:3, sc:20},
-];
-
-// ── Enemy class ───────────────────────────────────────────────────────
+// ── Enemy class ──────────────────────────────────────────────────────
 class Enemy {
-  constructor(x,y,ti,round){
+  constructor(x,y,ti,elapsed){
     const t=ETYPES[ti];
-    // stat multiplier: round 1 = 0.35×, round 16 = 1.5×
-    const sm = 0.35 + (round-1)*0.075;
-    // size multiplier: round 1 = 0.8×, round 16 = 1.15× (subtle)
-    const rm = 0.8 + (round-1)*0.023;
-    // power tier for visuals (0-4)
-    this.tier = Math.min(4, Math.floor((round-1)/3));
-    this.ti=ti;
-    this.x=x; this.y=y;
+    const mins=elapsed/60;
+    const sm=0.5+mins*0.18;
+    const rm=0.85+mins*0.04;
+    this.ti=ti; this.x=x; this.y=y;
     this.r=Math.round(t.r*rm);
     this.hp=Math.ceil(t.hp*sm); this.maxHp=this.hp;
-    this.spd=t.spd*(0.5+(round-1)*0.038);
+    this.spd=t.spd*(0.6+mins*0.08);
     this.dmg=t.dmg*sm;
-    this.baseCol=t.col; this.col=this._tierCol(t.col);
-    this.xp=t.xp; this.sc=Math.ceil(t.sc*sm);
+    this.col=t.col; this.xp=t.xp; this.sc=Math.ceil(t.sc*sm);
     this.name=t.n;
     this.dead=false; this.hitT=0;
     this.wobble=rand(0,Math.PI*2); this.contactCd=0;
-  }
-  // darken/tint color toward red in later tiers
-  _tierCol(col){
-    if(this.tier===0) return col;
-    // blend toward '#cc2200' as tier increases
-    const r1=parseInt(col.slice(1,3),16), g1=parseInt(col.slice(3,5),16), b1=parseInt(col.slice(5,7),16);
-    const t=this.tier/4;
-    const r2=Math.round(r1*(1-t)+0xcc*t);
-    const g2=Math.round(g1*(1-t)+0x22*t);
-    const b2=Math.round(b1*(1-t)+0x00*t);
-    return `rgb(${r2},${g2},${b2})`;
+    this.poisonT=0; this.slowT=0;
   }
   takeDamage(amt){
     if(this.dead) return;
-    this.hp-=amt;
-    this.hitT=0.12;
+    amt*=(player?player.dmgMult:1);
+    this.hp-=amt; this.hitT=0.12;
     spawnDmgNum(this.x,this.y,Math.floor(amt));
+    if(player&&player.poisonDmg>0) this.poisonT=2;
     if(this.hp<=0){ this.dead=true; this.die(); }
   }
   die(){
@@ -331,236 +451,87 @@ class Enemy {
     for(let i=0;i<this.xp;i++)
       gems.push(new Gem(this.x+rand(-12,12),this.y+rand(-12,12),1));
     spawnParticles(this.x,this.y,this.col,8);
+    if(player&&player.healOnKill>0) player.hp=Math.min(player.hp+player.healOnKill,player.maxHp);
   }
   update(dt){
+    if(this.slowT>0){ this.slowT-=dt; }
+    const spdMult=this.slowT>0?0.5:1;
     const dx=player.x-this.x, dy=player.y-this.y;
     const d=Math.hypot(dx,dy)||1;
-    this.x+=dx/d*this.spd*dt;
-    this.y+=dy/d*this.spd*dt;
+    this.x+=dx/d*this.spd*spdMult*dt;
+    this.y+=dy/d*this.spd*spdMult*dt;
     this.wobble+=dt*3.5;
     if(this.hitT>0) this.hitT-=dt;
     if(this.contactCd>0) this.contactCd-=dt;
-    if(dist(this,player)<this.r+player.r && this.contactCd<=0){
+    if(this.poisonT>0){
+      this.poisonT-=dt;
+      const pdmg=(player?player.poisonDmg||0:0);
+      if(pdmg>0){ this.hp-=pdmg*dt; if(this.hp<=0&&!this.dead){this.dead=true;this.die();}}
+    }
+    if(!this.dead && dist(this,player)<this.r+player.r && this.contactCd<=0){
       player.takeDamage(this.dmg*(1-player.defense));
       this.contactCd=0.5;
     }
   }
-  // Helper: draw glowing eyes facing direction ed
-  _glowEyes(sx,sy,r,ed,col){
-    const eyeCols=['#ffee00','#ffcc00','#ff8800','#ff2200','#cc00ff'];
-    const c=col||eyeCols[this.tier];
-    const er=r*0.48, eyeR=1.8+this.tier*0.35;
-    ctx.fillStyle=c;
-    ctx.shadowBlur=6; ctx.shadowColor=c;
-    ctx.beginPath();
-    ctx.arc(sx+ed.x*er-ed.y*(r*0.22), sy+ed.y*er+ed.x*(r*0.22), eyeR,0,Math.PI*2);
-    ctx.arc(sx+ed.x*er+ed.y*(r*0.22), sy+ed.y*er-ed.x*(r*0.22), eyeR,0,Math.PI*2);
-    ctx.fill();
-    ctx.shadowBlur=0;
-  }
-  // Zombie: lumpy green blob + stitches + fangs + red eyes
-  _drawZombie(sx,sy,bob,ed){
-    const r=this.r;
-    ctx.fillStyle=this.col;
-    ctx.beginPath();
-    // lumpy blob via bezierCurveTo
-    ctx.ellipse(sx,sy+bob,r,r*1.1,0,0,Math.PI*2);
-    ctx.fill();
-    // stitches
-    ctx.strokeStyle='#1a4a18'; ctx.lineWidth=1.5;
-    for(let i=-1;i<=1;i+=2){
-      ctx.beginPath();
-      ctx.moveTo(sx-r*0.15,sy+bob+r*0.15*i);
-      ctx.lineTo(sx+r*0.15,sy+bob+r*0.15*i);
-      ctx.stroke();
-    }
-    // fangs
-    ctx.fillStyle='#fff';
-    ctx.beginPath(); ctx.moveTo(sx-r*0.2,sy+bob+r*0.35); ctx.lineTo(sx-r*0.12,sy+bob+r*0.5); ctx.lineTo(sx-r*0.04,sy+bob+r*0.35); ctx.fill();
-    ctx.beginPath(); ctx.moveTo(sx+r*0.04,sy+bob+r*0.35); ctx.lineTo(sx+r*0.12,sy+bob+r*0.5); ctx.lineTo(sx+r*0.2,sy+bob+r*0.35); ctx.fill();
-    this._glowEyes(sx,sy+bob,r,ed,'#ff2200');
-  }
-  // Bat: wing arcs + antennae + fang + orange eyes
-  _drawBat(sx,sy,bob,ed){
-    const r=this.r;
-    const flap=Math.sin(this.wobble*2.5)*0.4;
-    ctx.fillStyle=this.col;
-    // left wing
-    ctx.beginPath(); ctx.moveTo(sx,sy+bob);
-    ctx.quadraticCurveTo(sx-r*2,(sy+bob)-r*1.5+flap*r, sx-r*2.2,sy+bob+r*0.4);
-    ctx.quadraticCurveTo(sx-r*1.2,sy+bob+r*0.6, sx,sy+bob+r*0.2);
-    ctx.fill();
-    // right wing
-    ctx.beginPath(); ctx.moveTo(sx,sy+bob);
-    ctx.quadraticCurveTo(sx+r*2,(sy+bob)-r*1.5+flap*r, sx+r*2.2,sy+bob+r*0.4);
-    ctx.quadraticCurveTo(sx+r*1.2,sy+bob+r*0.6, sx,sy+bob+r*0.2);
-    ctx.fill();
-    // body
-    ctx.beginPath(); ctx.ellipse(sx,sy+bob,r*0.7,r,0,0,Math.PI*2); ctx.fill();
-    // antennae
-    ctx.strokeStyle=this.col; ctx.lineWidth=1.5;
-    ctx.beginPath(); ctx.moveTo(sx-r*0.2,sy+bob-r*0.8); ctx.lineTo(sx-r*0.5,sy+bob-r*1.5); ctx.lineTo(sx-r*0.35,sy+bob-r*1.6); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(sx+r*0.2,sy+bob-r*0.8); ctx.lineTo(sx+r*0.5,sy+bob-r*1.5); ctx.lineTo(sx+r*0.35,sy+bob-r*1.6); ctx.stroke();
-    // single fang
-    ctx.fillStyle='#fff';
-    ctx.beginPath(); ctx.moveTo(sx-r*0.08,sy+bob+r*0.3); ctx.lineTo(sx,sy+bob+r*0.5); ctx.lineTo(sx+r*0.08,sy+bob+r*0.3); ctx.fill();
-    this._glowEyes(sx,sy+bob,r*0.7,ed,'#ff8800');
-  }
-  // Skeleton: skull + dark sockets + teeth row + crack
-  _drawSkeleton(sx,sy,bob,ed){
-    const r=this.r;
-    ctx.fillStyle=this.col;
-    // skull
-    ctx.beginPath(); ctx.ellipse(sx,sy+bob-r*0.1,r*0.9,r,0,0,Math.PI*2); ctx.fill();
-    // jaw
-    ctx.beginPath(); ctx.ellipse(sx,sy+bob+r*0.7,r*0.65,r*0.35,0,0,Math.PI*2); ctx.fill();
-    // dark eye sockets
-    ctx.fillStyle='#111';
-    ctx.beginPath(); ctx.ellipse(sx-r*0.32,sy+bob-r*0.1,r*0.22,r*0.28,0,0,Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.ellipse(sx+r*0.32,sy+bob-r*0.1,r*0.22,r*0.28,0,0,Math.PI*2); ctx.fill();
-    // red pupils
-    ctx.fillStyle='#ff2200';
-    ctx.beginPath(); ctx.arc(sx-r*0.32+ed.x*r*0.08,sy+bob-r*0.1+ed.y*r*0.08,r*0.1,0,Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.arc(sx+r*0.32+ed.x*r*0.08,sy+bob-r*0.1+ed.y*r*0.08,r*0.1,0,Math.PI*2); ctx.fill();
-    // teeth
-    ctx.fillStyle='#ddd';
-    for(let i=0;i<4;i++){
-      ctx.beginPath(); ctx.rect(sx-r*0.4+i*r*0.25,sy+bob+r*0.45,r*0.18,r*0.22); ctx.fill();
-    }
-    // crack on forehead
-    ctx.strokeStyle='#888'; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(sx,sy+bob-r*0.8); ctx.lineTo(sx-r*0.1,sy+bob-r*0.45); ctx.lineTo(sx+r*0.05,sy+bob-r*0.2); ctx.stroke();
-  }
-  // Ogre: large blobby body + horns + claws + angry brow + yellow eyes
-  _drawOgre(sx,sy,bob,ed){
-    const r=this.r;
-    ctx.fillStyle=this.col;
-    // body — wider at bottom
-    ctx.beginPath(); ctx.ellipse(sx,sy+bob+r*0.15,r,r*0.95,0,0,Math.PI*2); ctx.fill();
-    // horns
-    ctx.fillStyle='#885522';
-    ctx.beginPath(); ctx.moveTo(sx-r*0.4,sy+bob-r*0.75); ctx.lineTo(sx-r*0.55,sy+bob-r*1.3); ctx.lineTo(sx-r*0.2,sy+bob-r*0.8); ctx.fill();
-    ctx.beginPath(); ctx.moveTo(sx+r*0.4,sy+bob-r*0.75); ctx.lineTo(sx+r*0.55,sy+bob-r*1.3); ctx.lineTo(sx+r*0.2,sy+bob-r*0.8); ctx.fill();
-    // claws (3 finger stubs at bottom)
-    ctx.fillStyle='#995533';
-    for(let i=-1;i<=1;i++){
-      ctx.beginPath(); ctx.ellipse(sx+i*r*0.35,sy+bob+r*0.95,r*0.14,r*0.22,i*0.25,0,Math.PI*2); ctx.fill();
-    }
-    // angry brow
-    ctx.strokeStyle='#331100'; ctx.lineWidth=2.5;
-    ctx.beginPath(); ctx.moveTo(sx-r*0.5,sy+bob-r*0.15); ctx.lineTo(sx-r*0.15,sy+bob-r*0.3); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(sx+r*0.5,sy+bob-r*0.15); ctx.lineTo(sx+r*0.15,sy+bob-r*0.3); ctx.stroke();
-    this._glowEyes(sx,sy+bob,r,ed,'#ffcc00');
-  }
-  // Ghost: round translucent body + wispy tail + hollow eyes + blue glow
-  _drawGhost(sx,sy,bob,ed){
-    const r=this.r;
-    const tail=Math.sin(this.wobble)*r*0.3;
-    // blue outer glow
-    const grd=ctx.createRadialGradient(sx,sy+bob,0,sx,sy+bob,r*1.6);
-    grd.addColorStop(0,'rgba(100,180,255,0.18)');
-    grd.addColorStop(1,'rgba(100,180,255,0)');
-    ctx.fillStyle=grd; ctx.beginPath(); ctx.arc(sx,sy+bob,r*1.6,0,Math.PI*2); ctx.fill();
-    // body
-    ctx.globalAlpha=0.78;
-    ctx.fillStyle=this.col;
-    ctx.beginPath(); ctx.ellipse(sx,sy+bob-r*0.1,r*0.9,r,0,0,Math.PI*2); ctx.fill();
-    // wispy tail (away from player direction)
-    const awayX=-ed.x, awayY=-ed.y;
-    ctx.beginPath();
-    ctx.moveTo(sx-r*0.55,sy+bob+r*0.7);
-    ctx.quadraticCurveTo(sx-r*0.7+awayX*r*0.5, sy+bob+r*1.2+awayY*r*0.3+tail, sx-r*0.3+awayX*r*0.7, sy+bob+r*1.5+awayY*r*0.4);
-    ctx.moveTo(sx,sy+bob+r*0.85);
-    ctx.quadraticCurveTo(sx+awayX*r*0.4, sy+bob+r*1.3+awayY*r*0.4+tail*0.6, sx+awayX*r*0.6, sy+bob+r*1.65+awayY*r*0.5);
-    ctx.moveTo(sx+r*0.55,sy+bob+r*0.7);
-    ctx.quadraticCurveTo(sx+r*0.7+awayX*r*0.5, sy+bob+r*1.2+awayY*r*0.3-tail, sx+r*0.3+awayX*r*0.7, sy+bob+r*1.5+awayY*r*0.4);
-    ctx.fill();
-    ctx.globalAlpha=1;
-    // hollow eyes (dark ovals)
-    ctx.fillStyle='rgba(0,0,0,0.85)';
-    ctx.beginPath(); ctx.ellipse(sx-r*0.3,sy+bob-r*0.15,r*0.18,r*0.25,0,0,Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.ellipse(sx+r*0.3,sy+bob-r*0.15,r*0.18,r*0.25,0,0,Math.PI*2); ctx.fill();
-    // inner blue glow
-    ctx.fillStyle='rgba(130,210,255,0.7)';
-    ctx.beginPath(); ctx.ellipse(sx-r*0.3,sy+bob-r*0.15,r*0.08,r*0.12,0,0,Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.ellipse(sx+r*0.3,sy+bob-r*0.15,r*0.08,r*0.12,0,0,Math.PI*2); ctx.fill();
-  }
   draw(){
     const sx=this.x-camera.x, sy=this.y-camera.y;
-    if(sx<-80||sx>W+80||sy<-80||sy>H+80) return;
+    if(sx<-60||sx>W+60||sy<-60||sy>H+60) return;
     const bob=Math.sin(this.wobble)*2;
-    const ed=norm(player.x-this.x,player.y-this.y);
     ctx.save();
     if(this.hitT>0) ctx.filter='brightness(3) saturate(0)';
-    // shadow
     ctx.fillStyle='rgba(0,0,0,0.3)';
+    ctx.beginPath(); ctx.ellipse(sx,sy+this.r-1,this.r*.8,this.r*.3,0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=this.col;
+    ctx.beginPath(); ctx.arc(sx,sy+bob,this.r,0,Math.PI*2); ctx.fill();
+    // eyes
+    const ed=norm(player.x-this.x,player.y-this.y);
+    const er=this.r*0.45, eyeR=2;
+    ctx.fillStyle='#ff2200';
     ctx.beginPath();
-    ctx.ellipse(sx,sy+this.r-1,this.r*.8,this.r*.3,0,0,Math.PI*2);
+    ctx.arc(sx+ed.x*er-ed.y*3,sy+bob+ed.y*er+ed.x*3,eyeR,0,Math.PI*2);
+    ctx.arc(sx+ed.x*er+ed.y*3,sy+bob+ed.y*er-ed.x*3,eyeR,0,Math.PI*2);
     ctx.fill();
-    // type-specific drawing
-    if(this.ti===0) this._drawZombie(sx,sy,bob,ed);
-    else if(this.ti===1) this._drawBat(sx,sy,bob,ed);
-    else if(this.ti===2) this._drawSkeleton(sx,sy,bob,ed);
-    else if(this.ti===3) this._drawOgre(sx,sy,bob,ed);
-    else this._drawGhost(sx,sy,bob,ed);
-    // power-tier glow ring (tier 2+)
-    if(this.tier>=2){
-      const ringCols=['','','rgba(255,140,0,0.45)','rgba(255,40,0,0.55)','rgba(180,0,255,0.65)'];
-      ctx.filter='none';
-      ctx.strokeStyle=ringCols[this.tier];
-      ctx.lineWidth=2+this.tier;
-      ctx.shadowBlur=10+this.tier*4; ctx.shadowColor=ringCols[this.tier];
-      ctx.beginPath(); ctx.arc(sx,sy+bob,this.r+4,0,Math.PI*2); ctx.stroke();
-      ctx.shadowBlur=0;
-    }
     ctx.restore();
-    // hp bar
     if(this.hp<this.maxHp){
-      const bw=this.r*2.5, bh=4;
-      const bx=sx-bw/2, by=sy-this.r-14;
+      const bw=this.r*2.5, bh=4, bx=sx-bw/2, by=sy-this.r-10;
       ctx.fillStyle='#333'; ctx.fillRect(bx,by,bw,bh);
       ctx.fillStyle='#ff3344'; ctx.fillRect(bx,by,bw*(this.hp/this.maxHp),bh);
     }
   }
 }
 
-// ── Boss class ────────────────────────────────────────────────────────
+// ── Boss class ───────────────────────────────────────────────────────
 class Boss {
-  constructor(x,y,round){
-    this.x=x; this.y=y;
-    this.r=42;
+  constructor(x,y,mapIdx,isSecond){
+    this.x=x; this.y=y; this.r=44;
     this.isBoss=true;
-    // HP scales with which boss wave this is (rounds 4/8/12/16)
-    const hpTable=[900,1600,2600,4000];
-    const idx=Math.floor((round-4)/4);
-    this.maxHp=hpTable[clamp(idx,0,3)];
-    this.hp=this.maxHp;
-    this.baseDmg=38;
-    this.dmg=this.baseDmg;
-    this.spd=62;
-    this.col='#cc1144';
+    const m=MAPS[mapIdx];
+    this.name=isSecond?(m.boss2Name||m.bossName):m.bossName;
+    this.col=m.bossCol;
+    const baseHp=isSecond?3500:1800;
+    const scale=1+mapIdx*0.25;
+    this.maxHp=Math.ceil(baseHp*scale); this.hp=this.maxHp;
+    this.baseDmg=35+mapIdx*5; this.dmg=this.baseDmg;
+    this.spd=60+mapIdx*3;
     this.dead=false; this.hitT=0; this.wobble=0; this.contactCd=0;
-    // charge attack state
-    this.chargeCD=4.5;
-    this.chargeTimer=3;
-    this.isCharging=false;
-    this.chargeVx=0; this.chargeVy=0;
-    this.chargeDur=0;
-    this.xp=30; this.sc=600;
+    this.chargeCD=4; this.chargeTimer=3; this.isCharging=false;
+    this.chargeVx=0; this.chargeVy=0; this.chargeDur=0;
+    this.xp=30; this.sc=500+mapIdx*100;
   }
   takeDamage(amt){
     if(this.dead) return;
+    amt*=(player?player.dmgMult:1);
     this.hp-=amt; this.hitT=0.1;
     spawnDmgNum(this.x,this.y,Math.floor(amt));
     if(this.hp<=0){ this.dead=true; this.die(); }
   }
   die(){
     score+=this.sc;
-    for(let i=0;i<this.xp;i++)
-      gems.push(new Gem(this.x+rand(-35,35),this.y+rand(-35,35),1));
+    for(let i=0;i<this.xp;i++) gems.push(new Gem(this.x+rand(-35,35),this.y+rand(-35,35),1));
     spawnParticles(this.x,this.y,'#ff2244',20);
     spawnParticles(this.x,this.y,'#ffdd44',20);
-    spawnParticles(this.x,this.y,'#ffffff',12);
+    // check victory condition
+    checkBossVictory();
   }
   update(dt){
     this.wobble+=dt*1.8;
@@ -570,15 +541,14 @@ class Boss {
       this.chargeDur-=dt;
       if(this.chargeDur<=0){ this.isCharging=false; this.chargeTimer=this.chargeCD; this.dmg=this.baseDmg; }
     } else {
-      const dx=player.x-this.x, dy=player.y-this.y;
-      const d=Math.hypot(dx,dy)||1;
+      const dx=player.x-this.x, dy=player.y-this.y, d=Math.hypot(dx,dy)||1;
       this.x+=dx/d*this.spd*dt; this.y+=dy/d*this.spd*dt;
       this.chargeTimer-=dt;
       if(this.chargeTimer<=0){
         this.isCharging=true; this.chargeDur=0.55;
         const n=norm(player.x-this.x,player.y-this.y);
         this.chargeVx=n.x*400; this.chargeVy=n.y*400;
-        this.dmg=this.baseDmg*2.2;
+        this.dmg=this.baseDmg*2;
         spawnParticles(this.x,this.y,'#ff4400',8);
       }
     }
@@ -594,30 +564,23 @@ class Boss {
     const bob=Math.sin(this.wobble)*3;
     ctx.save();
     if(this.hitT>0) ctx.filter='brightness(2.5) saturate(0)';
-    // shadow
     ctx.fillStyle='rgba(0,0,0,0.45)';
-    ctx.beginPath();
-    ctx.ellipse(sx,sy+this.r-2,this.r*.9,this.r*.35,0,0,Math.PI*2);
-    ctx.fill();
-    // glow
+    ctx.beginPath(); ctx.ellipse(sx,sy+this.r-2,this.r*.9,this.r*.35,0,0,Math.PI*2); ctx.fill();
     ctx.shadowBlur=this.isCharging?50:25;
-    ctx.shadowColor=this.isCharging?'#ff4400':'#aa0033';
-    // outer body
-    ctx.fillStyle=this.isCharging?'#ff3300':'#cc1144';
+    ctx.shadowColor=this.isCharging?'#ff4400':this.col;
+    ctx.fillStyle=this.isCharging?'#ff3300':this.col;
     ctx.beginPath(); ctx.arc(sx,sy+bob,this.r,0,Math.PI*2); ctx.fill();
-    // inner body
     ctx.shadowBlur=0;
-    ctx.fillStyle='#ff2255';
-    ctx.beginPath(); ctx.arc(sx,sy+bob,this.r*.72,0,Math.PI*2); ctx.fill();
-    // crown spikes
-    ctx.fillStyle='#ffdd44';
-    ctx.shadowBlur=8; ctx.shadowColor='#ffaa00';
+    ctx.fillStyle=this.isCharging?'#ff6644':'#ff5566';
+    ctx.beginPath(); ctx.arc(sx,sy+bob,this.r*.7,0,Math.PI*2); ctx.fill();
+    // crown
+    ctx.fillStyle='#ffdd44'; ctx.shadowBlur=8; ctx.shadowColor='#ffaa00';
     for(let i=0;i<5;i++){
       const a=-Math.PI/2+(i-2)*0.42;
       ctx.beginPath();
-      ctx.moveTo(sx+Math.cos(a)*this.r, sy+bob+Math.sin(a)*this.r);
-      ctx.lineTo(sx+Math.cos(a-0.18)*(this.r+18), sy+bob+Math.sin(a-0.18)*(this.r+18));
-      ctx.lineTo(sx+Math.cos(a+0.18)*(this.r+18), sy+bob+Math.sin(a+0.18)*(this.r+18));
+      ctx.moveTo(sx+Math.cos(a)*this.r,sy+bob+Math.sin(a)*this.r);
+      ctx.lineTo(sx+Math.cos(a-0.18)*(this.r+18),sy+bob+Math.sin(a-0.18)*(this.r+18));
+      ctx.lineTo(sx+Math.cos(a+0.18)*(this.r+18),sy+bob+Math.sin(a+0.18)*(this.r+18));
       ctx.closePath(); ctx.fill();
     }
     ctx.shadowBlur=0;
@@ -633,34 +596,51 @@ class Boss {
     ctx.arc(sx+ed.x*19-ed.y*11,sy+bob+ed.y*19+ed.x*11,4.5,0,Math.PI*2);
     ctx.arc(sx+ed.x*19+ed.y*11,sy+bob+ed.y*19-ed.x*11,4.5,0,Math.PI*2);
     ctx.fill();
-    // name
     ctx.fillStyle='#ff6688'; ctx.font='bold 13px Courier New'; ctx.textAlign='center';
     ctx.shadowBlur=6; ctx.shadowColor='#000';
-    ctx.fillText('★ 啵刚 ★',sx,sy+bob-this.r-8);
+    ctx.fillText(`★ ${this.name} ★`,sx,sy+bob-this.r-8);
     ctx.shadowBlur=0;
     ctx.restore();
   }
 }
 
-function spawnBoss(){
-  // spawn off the edge of screen
-  const side=randInt(0,3);
-  let x,y; const M=180;
-  if(side===0){x=camera.x-M;y=camera.y+H/2;}
-  else if(side===1){x=camera.x+W+M;y=camera.y+H/2;}
-  else if(side===2){x=camera.x+W/2;y=camera.y-M;}
-  else{x=camera.x+W/2;y=camera.y+H+M;}
-  enemies.push(new Boss(x,y,currentRound));
-  roundBanner={text:'⚠  BOSS 啵刚 出现了!  ⚠',timer:3};
+function checkBossVictory(){
+  setTimeout(()=>{
+    const m=MAPS[selectedMapIdx];
+    const aliveBosses=enemies.filter(e=>e.isBoss&&!e.dead);
+    if(aliveBosses.length>0) return;
+    // all bosses dead
+    if(m.twoBoss){
+      if(bossSpawned && boss2Spawned) triggerVictory();
+      // if only first boss dead, wait for second
+    } else {
+      triggerVictory();
+    }
+  },100);
 }
 
-// ── Projectile class ──────────────────────────────────────────────────
+function triggerVictory(){
+  const m=MAPS[selectedMapIdx];
+  sessionCrystals=m.crystals;
+  save.crystals+=sessionCrystals;
+  if(!save.clearedMaps.includes(selectedMapIdx)) save.clearedMaps.push(selectedMapIdx);
+  // unlock characters
+  for(const [k,c] of Object.entries(CHARACTERS)){
+    if(c.unlockMap===selectedMapIdx && !save.unlockedChars.includes(k)){
+      save.unlockedChars.push(k);
+    }
+  }
+  writeSave(save);
+  state='victory';
+}
+
+// ── Projectile class ─────────────────────────────────────────────────
 class Proj {
   constructor(x,y,vx,vy,r,col,dmg,pierce,type){
     this.x=x;this.y=y;this.vx=vx;this.vy=vy;
     this.r=r;this.col=col;this.dmg=dmg;this.pierce=pierce;
     this.type=type;this.life=2;this.gravity=0;
-    this.rot=0;this.rotSpd=0;
+    this.rot=0;this.rotSpd=0;this.slow=0;this.stk=0;
     this.hit=new Set();
   }
   update(dt){
@@ -674,6 +654,25 @@ class Proj {
       if(dist(this,e)<this.r+e.r){
         this.hit.add(e);
         e.takeDamage(this.dmg);
+        if(this.slow>0) e.slowT=Math.max(e.slowT||0,1.5);
+        if(this.type==='heal'&&player) player.hp=Math.min(player.hp+2,player.maxHp);
+        if(this.type==='explode'){
+          for(const e2 of enemies){
+            if(!e2.dead&&e2!==e&&dist(this,e2)<60+this.stk*15)
+              e2.takeDamage(this.dmg*0.6);
+          }
+          spawnParticles(this.x,this.y,'#ff4400',8);
+          this.life=-1; break;
+        }
+        if(this.type==='poison'){
+          for(const e2 of enemies){
+            if(!e2.dead&&dist(this,e2)<50+this.stk*12){
+              e2.takeDamage(this.dmg*0.4); e2.poisonT=2+this.stk;
+            }
+          }
+          spawnParticles(this.x,this.y,'#44ff66',6);
+          this.life=-1; break;
+        }
         this.pierce--;
         if(this.pierce<0){ this.life=-1; break; }
       }
@@ -684,40 +683,17 @@ class Proj {
     const sx=this.x-camera.x, sy=this.y-camera.y;
     if(sx<-20||sx>W+20||sy<-20||sy>H+20) return;
     ctx.save();
-    ctx.translate(sx,sy);
-    ctx.rotate(this.rot);
-    ctx.shadowBlur=12; ctx.shadowColor=this.col;
+    ctx.translate(sx,sy); ctx.rotate(this.rot);
+    ctx.shadowBlur=10; ctx.shadowColor=this.col;
     ctx.fillStyle=this.col;
-    if(this.type==='knife'){
-      ctx.beginPath();
-      ctx.ellipse(0,0,this.r*2.5,this.r*.7,Math.atan2(this.vy,this.vx),0,Math.PI*2);
-      ctx.fill();
-    } else if(this.type==='hammer'){
-      // 锤柄（木色，竖向）
-      ctx.fillStyle='#8b5e3c';
-      ctx.fillRect(-this.r*.28, -this.r*.2, this.r*.56, this.r*2.4);
-      // 锤头（紫色，横向宽块）
-      ctx.fillStyle=this.col;
-      ctx.fillRect(-this.r*1.6, -this.r*1.2, this.r*3.2, this.r*1.3);
-      // 锤头顶部高光
-      ctx.fillStyle='rgba(200,160,255,0.45)';
-      ctx.fillRect(-this.r*1.6, -this.r*1.2, this.r*3.2, this.r*.35);
-      // 锤头正面金属纹
-      ctx.fillStyle='rgba(255,255,255,0.15)';
-      ctx.fillRect(-this.r*1.55, -this.r*.95, this.r*.4, this.r*.8);
-    } else if(this.type==='cross'){
-      ctx.fillRect(-this.r*.4,-this.r,this.r*.8,this.r*2);
-      ctx.fillRect(-this.r,-this.r*.4,this.r*2,this.r*.8);
-    } else {
-      ctx.beginPath(); ctx.arc(0,0,this.r,0,Math.PI*2); ctx.fill();
-      ctx.fillStyle='rgba(255,255,255,0.5)';
-      ctx.beginPath(); ctx.arc(-this.r*.25,-this.r*.25,this.r*.4,0,Math.PI*2); ctx.fill();
-    }
+    ctx.beginPath(); ctx.arc(0,0,this.r,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,0.4)';
+    ctx.beginPath(); ctx.arc(-this.r*.25,-this.r*.25,this.r*.35,0,Math.PI*2); ctx.fill();
     ctx.restore();
   }
 }
 
-// ── Gem class ─────────────────────────────────────────────────────────
+// ── Gem class ────────────────────────────────────────────────────────
 class Gem {
   constructor(x,y,v){ this.x=x;this.y=y;this.v=v;this.r=5+v;this.bob=rand(0,Math.PI*2); }
   update(dt){ this.bob+=dt*2; }
@@ -729,29 +705,20 @@ class Gem {
     ctx.shadowBlur=8; ctx.shadowColor='#00ff88';
     ctx.fillStyle='#00ff88';
     ctx.beginPath();
-    ctx.moveTo(sx,    sy+b-this.r);
-    ctx.lineTo(sx+this.r, sy+b);
-    ctx.lineTo(sx,    sy+b+this.r);
-    ctx.lineTo(sx-this.r, sy+b);
-    ctx.closePath(); ctx.fill();
-    ctx.fillStyle='rgba(200,255,220,0.7)';
-    ctx.beginPath();
-    ctx.moveTo(sx,    sy+b-this.r*.5);
-    ctx.lineTo(sx+this.r*.4, sy+b);
-    ctx.lineTo(sx,    sy+b+this.r*.3);
+    ctx.moveTo(sx,sy+b-this.r); ctx.lineTo(sx+this.r,sy+b);
+    ctx.lineTo(sx,sy+b+this.r); ctx.lineTo(sx-this.r,sy+b);
     ctx.closePath(); ctx.fill();
     ctx.restore();
   }
 }
 
-// ── Particle class ────────────────────────────────────────────────────
+// ── Particle class ───────────────────────────────────────────────────
 class Particle {
   constructor(x,y,col){
     this.x=x;this.y=y;this.col=col;
     const a=rand(0,Math.PI*2), s=rand(40,130);
     this.vx=Math.cos(a)*s; this.vy=Math.sin(a)*s;
-    this.life=rand(0.3,.8); this.maxL=this.life;
-    this.r=rand(2,5);
+    this.life=rand(0.3,.8); this.maxL=this.life; this.r=rand(2,5);
   }
   update(dt){
     this.x+=this.vx*dt; this.y+=this.vy*dt;
@@ -761,44 +728,61 @@ class Particle {
   draw(){
     const sx=this.x-camera.x, sy=this.y-camera.y;
     const a=this.life/this.maxL;
-    ctx.globalAlpha=a;
-    ctx.fillStyle=this.col;
+    ctx.globalAlpha=a; ctx.fillStyle=this.col;
     ctx.beginPath(); ctx.arc(sx,sy,this.r*a,0,Math.PI*2); ctx.fill();
     ctx.globalAlpha=1;
   }
 }
 
-// ── Player class ──────────────────────────────────────────────────────
+// ── Player class ─────────────────────────────────────────────────────
 class Player {
-  constructor(){
+  constructor(charKey){
+    const c=CHARACTERS[charKey];
+    this.charKey=charKey;
     this.x=0;this.y=0;this.r=16;
-    this.hp=100;this.maxHp=100;
-    this.speed=155;this.xp=0;this.level=1;
-    this.xpNext=5;  // lowered starting threshold for faster leveling
-    this.invT=0;this.flickT=0;
-    this.facing=0;this.weapons=[];
-    this.pickup=65;this.cdMult=1;this.dmgMult=1;
-    this.defense=0;
-    this.addWeapon('wand');
+    this.hp=c.hp; this.maxHp=c.hp;
+    this.speed=c.speed; this.xp=0; this.level=1;
+    this.xpNext=5;
+    this.invT=0; this.flickT=0;
+    this.facing=0; this.weapons=[];
+    this.pickup=65; this.cdMult=1; this.dmgMult=1;
+    this.defense=0; this.poisonDmg=0;
+    this.regenPerSec=0; this.healOnKill=0;
+    this.glowCol=c.glowCol;
+    // velocity for ice maps
+    this.vx=0; this.vy=0;
+    // add starting skill
+    this.addSkill(c.startSkill);
   }
-  addWeapon(id){
-    const def=WEAPONS[id];
-    if(!def||this.hasWeapon(id)) return;
-    const w={id,level:1,timer:0,...JSON.parse(JSON.stringify(def.base))};
-    if(id==='garlic') w._pulse=0;
-    this.weapons.push(w);
+  addSkill(id){
+    const def=SKILLS[id];
+    if(!def) return;
+    const existing=this.weapons.find(w=>w.id===id);
+    if(existing){
+      if(existing.stack<3){ existing.stack++; this._applySkillStack(id); }
+      return;
+    }
+    if(def.type==='active'){
+      this.weapons.push({id,stack:1,timer:0,cooldown:def.cooldown});
+    } else {
+      this.weapons.push({id,stack:1,timer:0,cooldown:999});
+      this._applySkillStack(id);
+    }
   }
-  hasWeapon(id){ return this.weapons.some(w=>w.id===id); }
+  _applySkillStack(id){
+    const def=SKILLS[id];
+    if(def.type==='passive'&&def.onApply){
+      const w=this.weapons.find(w=>w.id===id);
+      def.onApply(this,w?w.stack:1);
+    }
+  }
+  hasSkill(id){ return this.weapons.some(w=>w.id===id); }
   gainXP(v){
     this.xp+=v;
-    while(this.xp>=this.xpNext){
-      this.xp-=this.xpNext;
-      this.levelUp();
-    }
+    while(this.xp>=this.xpNext){ this.xp-=this.xpNext; this.levelUp(); }
   }
   levelUp(){
     this.level++;
-    // slower scaling = more frequent level-ups
     this.xpNext=Math.floor(this.xpNext*1.2+2);
     this.hp=Math.min(this.hp+15,this.maxHp);
     buildUpgradeChoices();
@@ -815,29 +799,49 @@ class Player {
     let dx=0,dy=0;
     if(keys['ArrowLeft']||keys['a']||keys['A']) dx-=1;
     if(keys['ArrowRight']||keys['d']||keys['D']) dx+=1;
-    if(keys['ArrowUp']  ||keys['w']||keys['W']) dy-=1;
-    if(keys['ArrowDown'] ||keys['s']||keys['S']) dy+=1;
-    const n=norm(dx,dy);
-    this.x+=n.x*this.speed*dt;
-    this.y+=n.y*this.speed*dt;
-    // clamp inside map
-    this.x=clamp(this.x,-MAP_HW+this.r, MAP_HW-this.r);
-    this.y=clamp(this.y,-MAP_HH+this.r, MAP_HH-this.r);
-    if(dx||dy) this.facing=Math.atan2(n.y,n.x);
-    if(this.invT>0)  this.invT-=dt;
-    if(this.flickT>0)this.flickT-=dt;
-    // weapons
+    if(keys['ArrowUp']||keys['w']||keys['W']) dy-=1;
+    if(keys['ArrowDown']||keys['s']||keys['S']) dy+=1;
+    const m=MAPS[selectedMapIdx];
+    if(m.mechanic==='ice'){
+      // ice sliding: inertia
+      const n=norm(dx||0.001,dy||0.001);
+      if(dx||dy){
+        this.vx=lerp(this.vx,n.x*this.speed,dt*2);
+        this.vy=lerp(this.vy,n.y*this.speed,dt*2);
+      } else {
+        this.vx*=Math.pow(0.96,dt*60); this.vy*=Math.pow(0.96,dt*60);
+      }
+      this.x+=this.vx*dt; this.y+=this.vy*dt;
+    } else if(m.mechanic==='current'){
+      // water current push
+      const n2=norm(dx,dy);
+      this.x+=n2.x*this.speed*dt + 35*dt;
+      this.y+=n2.y*this.speed*dt + 20*Math.sin(gameTime)*dt;
+    } else {
+      const n=norm(dx,dy);
+      this.x+=n.x*this.speed*dt;
+      this.y+=n.y*this.speed*dt;
+    }
+    this.x=clamp(this.x,-MAP_HW+this.r,MAP_HW-this.r);
+    this.y=clamp(this.y,-MAP_HH+this.r,MAP_HH-this.r);
+    if(dx||dy) this.facing=Math.atan2(dy,dx);
+    if(this.invT>0) this.invT-=dt;
+    if(this.flickT>0) this.flickT-=dt;
+    // regen
+    if(this.regenPerSec>0) this.hp=Math.min(this.hp+this.regenPerSec*dt,this.maxHp);
+    // fire active skills
     for(const w of this.weapons){
+      const def=SKILLS[w.id];
+      if(!def||def.type!=='active') continue;
       w.timer-=dt;
       if(w.timer<=0){
         w.timer=w.cooldown*this.cdMult;
-        WEAPONS[w.id].fire(w,this);
+        def.fire(w,this,w.stack);
       }
     }
-    // gems pickup & attract
+    // gem pickup
     for(let i=gems.length-1;i>=0;i--){
-      const g=gems[i];
-      const d=dist(this,g);
+      const g=gems[i], d=dist(this,g);
       if(d<this.pickup+g.r){
         this.gainXP(g.v);
         spawnParticles(g.x,g.y,'#00ff88',4);
@@ -851,60 +855,39 @@ class Player {
   draw(){
     if(this.flickT>0&&Math.floor(this.flickT*10)%2===0) return;
     const sx=this.x-camera.x, sy=this.y-camera.y;
-    const size=this.r*1.6; // display size of the player image
+    const size=this.r*1.6;
     ctx.save();
-    // shadow
     ctx.fillStyle='rgba(0,0,0,0.35)';
-    ctx.beginPath();
-    ctx.ellipse(sx, sy+this.r-2, this.r*.85, this.r*.3, 0, 0, Math.PI*2);
-    ctx.fill();
-    // glow ring drawn BEFORE the image — never set shadowBlur on drawImage
-    // (shadowBlur + drawImage fills transparent pixels with white in Canvas)
-    const glowGrad=ctx.createRadialGradient(sx,sy,0,sx,sy,this.r*1.4);
-    glowGrad.addColorStop(0,'rgba(233,69,96,0.45)');
-    glowGrad.addColorStop(1,'rgba(233,69,96,0)');
-    ctx.fillStyle=glowGrad;
+    ctx.beginPath(); ctx.ellipse(sx,sy+this.r-2,this.r*.85,this.r*.3,0,0,Math.PI*2); ctx.fill();
+    const g=ctx.createRadialGradient(sx,sy,0,sx,sy,this.r*1.4);
+    g.addColorStop(0,this.glowCol.replace(')',',0.45)').replace('rgb','rgba'));
+    g.addColorStop(1,this.glowCol.replace(')',',0)').replace('rgb','rgba'));
+    ctx.fillStyle=g;
     ctx.beginPath(); ctx.arc(sx,sy,this.r*1.4,0,Math.PI*2); ctx.fill();
-    // Reset ALL canvas state that could cause white fill before drawImage.
-    // shadowBlur, globalAlpha, filter, and globalCompositeOperation can all
-    // corrupt transparent PNGs on certain browsers / GitHub Pages CDN.
-    ctx.shadowBlur = 0;
-    ctx.shadowColor = 'transparent';
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.filter = 'none';
-    if(playerImgReady){
-      // flip horizontally when facing left
+    ctx.shadowBlur=0; ctx.shadowColor='transparent';
+    ctx.globalAlpha=1; ctx.globalCompositeOperation='source-over'; ctx.filter='none';
+    const img=charImages[this.charKey];
+    if(img){
       if(Math.cos(this.facing)<0){
-        ctx.translate(sx,sy);
-        ctx.scale(-1,1);
-        ctx.drawImage(playerCanvas,-size/2,-size/2,size,size);
+        ctx.translate(sx,sy); ctx.scale(-1,1);
+        ctx.drawImage(img,-size/2,-size/2,size,size);
       } else {
-        ctx.drawImage(playerCanvas, sx-size/2, sy-size/2, size, size);
+        ctx.drawImage(img,sx-size/2,sy-size/2,size,size);
       }
     } else {
-      ctx.shadowBlur=15; ctx.shadowColor='#e94560';
-      ctx.fillStyle='#e94560';
+      ctx.shadowBlur=15; ctx.shadowColor=this.glowCol;
+      ctx.fillStyle=this.glowCol;
       ctx.beginPath(); ctx.arc(sx,sy,this.r,0,Math.PI*2); ctx.fill();
     }
     ctx.restore();
   }
 }
 
-// ── helpers ───────────────────────────────────────────────────────────
+// ── helpers ──────────────────────────────────────────────────────────
 function nearestEnemies(x,y,count){
   return [...enemies].filter(e=>!e.dead)
     .sort((a,b)=>Math.hypot(a.x-x,a.y-y)-Math.hypot(b.x-x,b.y-y))
     .slice(0,count);
-}
-function nearestEnemy(x,y,maxD,exc=null){
-  let best=null,bestD=maxD;
-  for(const e of enemies){
-    if(e===exc||e.dead) continue;
-    const d=Math.hypot(e.x-x,e.y-y);
-    if(d<bestD){bestD=d;best=e;}
-  }
-  return best;
 }
 function spawnParticles(x,y,col,n){
   if(particles.length>400) return;
@@ -914,57 +897,60 @@ function spawnDmgNum(x,y,v){
   damageNums.push({x,y,v,life:0.9,maxL:0.9,vy:-55});
 }
 
-// ── spawning ──────────────────────────────────────────────────────────
+// ── spawning ─────────────────────────────────────────────────────────
 function spawnEnemy(){
   if(enemies.length>=200) return;
   const side=randInt(0,3);
-  let x,y;
-  const M=130;
-  if(side===0){x=camera.x-M;     y=camera.y+rand(0,H);}
-  else if(side===1){x=camera.x+W+M;  y=camera.y+rand(0,H);}
+  let x,y; const M=130;
+  if(side===0){x=camera.x-M;y=camera.y+rand(0,H);}
+  else if(side===1){x=camera.x+W+M;y=camera.y+rand(0,H);}
   else if(side===2){x=camera.x+rand(0,W);y=camera.y-M;}
-  else{             x=camera.x+rand(0,W);y=camera.y+H+M;}
-
-  // enemy pool scales with current round (harder as rounds progress)
+  else{x=camera.x+rand(0,W);y=camera.y+H+M;}
+  const mins=gameTime/60;
   let pool;
-  const r=currentRound;
-  if(r<=2)       pool=[0,0,0,1];
-  else if(r<=4)  pool=[0,0,1,1,4];
-  else if(r<=6)  pool=[0,1,1,2,4];
-  else if(r<=9)  pool=[0,1,2,2,3,4];
-  else if(r<=12) pool=[1,2,2,3,3,4];
-  else           pool=[2,3,3,4,4];
+  if(mins<1)      pool=[0,0,0,1];
+  else if(mins<2) pool=[0,0,1,1,5];
+  else if(mins<3) pool=[0,1,1,2,5];
+  else if(mins<5) pool=[0,1,2,2,3,5];
+  else if(mins<7) pool=[1,2,2,3,3,5];
+  else            pool=[2,3,3,4,4,5];
+  enemies.push(new Enemy(x,y,pool[randInt(0,pool.length-1)],gameTime));
+}
 
-  enemies.push(new Enemy(x,y,pool[randInt(0,pool.length-1)],currentRound));
+function spawnBoss(isSecond){
+  const side=randInt(0,3);
+  let x,y; const M=180;
+  if(side===0){x=camera.x-M;y=camera.y+H/2;}
+  else if(side===1){x=camera.x+W+M;y=camera.y+H/2;}
+  else if(side===2){x=camera.x+W/2;y=camera.y-M;}
+  else{x=camera.x+W/2;y=camera.y+H+M;}
+  const boss=new Boss(x,y,selectedMapIdx,isSecond);
+  enemies.push(boss);
+  roundBanner={text:`⚠ BOSS ${boss.name} 出现了! ⚠`,timer:3};
 }
 
 // ── level up ─────────────────────────────────────────────────────────
 function buildUpgradeChoices(){
   const pool=[];
-  // weapon upgrades
-  for(const w of player.weapons){
-    const ups=WEAPONS[w.id].ups;
-    const idx=w.level-1;
-    if(idx<ups.length){
+  const skillPool=CHAR_SKILL_POOLS[selectedCharKey]||[];
+  // skill upgrades (stack existing or add new)
+  for(const sid of skillPool){
+    const def=SKILLS[sid];
+    if(!def) continue;
+    const existing=player.weapons.find(w=>w.id===sid);
+    if(existing){
+      if(existing.stack<3){
+        pool.push({
+          type:'skill_up', id:sid,
+          name:`强化 ${def.name}`, desc:`叠加到 ${existing.stack+1}/3 层`,
+          icon:def.icon, col:def.color, sid
+        });
+      }
+    } else {
       pool.push({
-        type:'wup',id:w.id,
-        name:`强化 ${WEAPONS[w.id].name}`,
-        desc:ups[idx].d,
-        icon:WEAPONS[w.id].icon,
-        col:WEAPONS[w.id].color,
-        w,upg:ups[idx],
-      });
-    }
-  }
-  // new weapons
-  for(const [id,def] of Object.entries(WEAPONS)){
-    if(!player.hasWeapon(id)&&player.weapons.length<5){
-      pool.push({
-        type:'wnew',id,
-        name:`获得 ${def.name}`,
-        desc:def.desc,
-        icon:def.icon,
-        col:def.color,
+        type:'skill_new', id:sid,
+        name:`获得 ${def.name}`, desc:def.desc,
+        icon:def.icon, col:def.color, sid
       });
     }
   }
@@ -977,10 +963,9 @@ function buildUpgradeChoices(){
 }
 
 function handleLevelUpClick(mx,my){
-  const cw=210,ch=240,gap=30;
+  const cw=210,ch=220,gap=30;
   const total=cw*3+gap*2;
-  const sx=(W-total)/2;
-  const sy=(H-ch)/2-20;
+  const sx=(W-total)/2, sy=(H-ch)/2-20;
   for(let i=0;i<upgradeChoices.length;i++){
     const cx=sx+i*(cw+gap);
     if(mx>=cx&&mx<=cx+cw&&my>=sy&&my<=sy+ch){
@@ -992,17 +977,54 @@ function handleLevelUpClick(mx,my){
 }
 
 function applyUpgrade(c){
-  if(c.type==='wup'){
-    c.upg.f(c.w);
-    c.w.level++;
-  } else if(c.type==='wnew'){
-    player.addWeapon(c.id);
+  if(c.type==='skill_up'||c.type==='skill_new'){
+    player.addSkill(c.sid);
   } else {
     c.apply(player);
   }
 }
 
-// ── draw helpers ──────────────────────────────────────────────────────
+// ── character select ─────────────────────────────────────────────────
+function handleCharSelectClick(mx,my){
+  const chars=Object.entries(CHARACTERS);
+  const cw=140,ch=180,gap=16;
+  const total=cw*chars.length+gap*(chars.length-1);
+  const sx=(W-total)/2, sy=220;
+  for(let i=0;i<chars.length;i++){
+    const cx=sx+i*(cw+gap);
+    const [key]=chars[i];
+    const unlocked=save.unlockedChars.includes(key);
+    if(mx>=cx&&mx<=cx+cw&&my>=sy&&my<=sy+ch&&unlocked){
+      selectedCharKey=key;
+      state='mapselect';
+      return;
+    }
+  }
+}
+
+// ── map select ───────────────────────────────────────────────────────
+function handleMapSelectClick(mx,my){
+  const cols=4, rows=2;
+  const cw=180, ch=100, gap=16;
+  const totalW=cw*cols+gap*(cols-1);
+  const baseX=(W-totalW)/2, baseY=180;
+  for(let i=0;i<MAPS.length;i++){
+    const row=Math.floor(i/cols), col=i%cols;
+    const cx=baseX+col*(cw+gap), cy=baseY+row*(ch+gap);
+    const unlocked=i===0||save.clearedMaps.includes(i-1);
+    if(mx>=cx&&mx<=cx+cw&&my>=cy&&my<=cy+ch&&unlocked){
+      selectedMapIdx=i;
+      startGame();
+      return;
+    }
+  }
+  // back button
+  if(mx>=20&&mx<=120&&my>=H-50&&my<=H-20){
+    state='charselect';
+  }
+}
+
+// ── draw helpers ─────────────────────────────────────────────────────
 function roundRect(x,y,w,h,r){
   ctx.beginPath();
   ctx.moveTo(x+r,y);
@@ -1013,156 +1035,269 @@ function roundRect(x,y,w,h,r){
   ctx.closePath();
 }
 
-// ── init / start ──────────────────────────────────────────────────────
+// ── start game ───────────────────────────────────────────────────────
+let roundBanner=null;
 function startGame(){
-  player=new Player();
+  player=new Player(selectedCharKey);
   camera={x:-W/2,y:-H/2};
   enemies=[];projectiles=[];gems=[];particles=[];
   damageNums=[];lightningFX=[];
   gameTime=0;score=0;spawnTimer=0;
   upgradeChoices=[];
-  currentRound=1;
-  roundTimer=0;
-  roundBanner=null; // {text, timer}
+  bossSpawned=false; boss2Spawned=false;
+  sessionCrystals=0;
+  roundBanner=null;
+  mapHazards={timer:0,zones:[],mirrorClone:null,frozen:false,freezeTimer:0};
   state='playing';
 }
 
-// ── update ────────────────────────────────────────────────────────────
+// ── update ───────────────────────────────────────────────────────────
 function update(dt){
   if(state!=='playing') return;
   gameTime+=dt;
-  roundTimer+=dt;
 
-  // round advancement
-  if(roundTimer>=ROUND_DURATION){
-    roundTimer-=ROUND_DURATION;
-    if(currentRound>=TOTAL_ROUNDS){
-      state='victory';
-      return;
-    }
-    currentRound++;
-    // heal player between rounds
-    player.hp=Math.min(player.hp+20,player.maxHp);
-    // spawn boss at rounds 4, 8, 12, 16 (only if no boss alive)
-    if([4,8,12,16].includes(currentRound) && !enemies.some(e=>e.isBoss)){
-      spawnBoss();
-    } else {
-      roundBanner={text:`第 ${currentRound} / ${TOTAL_ROUNDS} 回合`, timer:2.5};
-    }
+  const m=MAPS[selectedMapIdx];
+
+  // boss spawn logic
+  if(m.twoBoss){
+    if(!bossSpawned && gameTime>=300){ bossSpawned=true; spawnBoss(false); }
+    if(!boss2Spawned && gameTime>=600){ boss2Spawned=true; spawnBoss(true); }
+  } else {
+    if(!bossSpawned && gameTime>=180){ bossSpawned=true; spawnBoss(false); }
   }
 
-  // update round banner timer
-  if(roundBanner) roundBanner.timer-=dt;
+  // round banner
+  if(roundBanner){ roundBanner.timer-=dt; if(roundBanner.timer<=0) roundBanner=null; }
 
   camera.x=player.x-W/2;
   camera.y=player.y-H/2;
+
+  // map hazards
+  updateMapHazards(dt);
+
+  // timestop check
+  const frozen=mapHazards.frozen||false;
 
   player.update(dt);
 
   for(let i=projectiles.length-1;i>=0;i--)
     if(!projectiles[i].update(dt)) projectiles.splice(i,1);
 
-  for(const e of enemies) if(!e.dead) e.update(dt);
+  if(!frozen){
+    for(const e of enemies) if(!e.dead) e.update(dt);
+  }
   for(let i=enemies.length-1;i>=0;i--)
     if(enemies[i].dead) enemies.splice(i,1);
 
   for(const g of gems) g.update(dt);
-
   for(let i=particles.length-1;i>=0;i--)
     if(!particles[i].update(dt)) particles.splice(i,1);
-
   for(let i=damageNums.length-1;i>=0;i--){
     const d=damageNums[i];
     d.y+=d.vy*dt; d.vy*=0.88; d.life-=dt;
     if(d.life<=0) damageNums.splice(i,1);
   }
-
   for(let i=lightningFX.length-1;i>=0;i--){
     lightningFX[i].t-=dt;
     if(lightningFX[i].t<=0) lightningFX.splice(i,1);
   }
 
-  // spawn — round 1: slow trickle; round 16: dense waves
+  // spawn
   spawnTimer-=dt;
   if(spawnTimer<=0){
-    const interval=Math.max(0.28, 2.8 - currentRound*0.17); // 2.63s→0.28s
-    const cnt=Math.max(1, Math.floor(currentRound*0.42));    // 1→6
+    const mins=gameTime/60;
+    const interval=Math.max(0.3, 2.5-mins*0.25);
+    const cnt=Math.max(1, Math.floor(mins*0.6+1));
     for(let i=0;i<cnt;i++) spawnEnemy();
     spawnTimer=interval;
   }
 }
 
-// ── draw ──────────────────────────────────────────────────────────────
-function drawBg(){
-  // ── base fill ──────────────────────────────────────────────────────
-  ctx.fillStyle='#0d0d1a'; ctx.fillRect(0,0,W,H);
+// ── map hazards ──────────────────────────────────────────────────────
+function updateMapHazards(dt){
+  const m=MAPS[selectedMapIdx];
+  const h=mapHazards;
+  h.timer=(h.timer||0)+dt;
 
-  // ── outside-map dark overlay ────────────────────────────────────────
-  // Convert map edges to screen coords
-  const leftX  = -MAP_HW - camera.x;
-  const rightX =  MAP_HW - camera.x;
-  const topY   = -MAP_HH - camera.y;
-  const botY   =  MAP_HH - camera.y;
-
-  ctx.fillStyle='rgba(0,0,0,0.55)';
-  if(leftX  > 0)   ctx.fillRect(0,        0,  leftX,        H);
-  if(rightX < W)   ctx.fillRect(rightX,   0,  W-rightX,     H);
-  if(topY   > 0)   ctx.fillRect(leftX,    0,  rightX-leftX, topY);
-  if(botY   < H)   ctx.fillRect(leftX,    botY, rightX-leftX, H-botY);
-
-  // ── grid (only inside map) ─────────────────────────────────────────
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(Math.max(0,leftX), Math.max(0,topY),
-           Math.min(W,rightX)-Math.max(0,leftX),
-           Math.min(H,botY)  -Math.max(0,topY));
-  ctx.clip();
-  ctx.strokeStyle='rgba(255,255,255,0.04)'; ctx.lineWidth=1;
-  const SZ=64;
-  const ox=(-camera.x)%SZ, oy=(-camera.y)%SZ;
-  for(let x=ox;x<W;x+=SZ){ ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke(); }
-  for(let y=oy;y<H;y+=SZ){ ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke(); }
-  ctx.restore();
-
-  // ── glowing border walls ───────────────────────────────────────────
-  const t = Date.now()/1000;
-  const pulse = 0.6 + 0.4*Math.sin(t*2); // breathing glow
-  const wallW = 6;
-  const wallCol = `rgba(80,180,255,${0.6*pulse})`;
-  const glowCol = `rgba(80,180,255,${0.25*pulse})`;
-
-  ctx.save();
-  ctx.shadowBlur = 24*pulse; ctx.shadowColor = '#50b4ff';
-  ctx.strokeStyle = wallCol; ctx.lineWidth = wallW;
-
-  // only draw edges that are on screen
-  const L=leftX, R=rightX, T=topY, B=botY;
-  // left wall
-  if(L>-wallW && L<W){
-    ctx.beginPath(); ctx.moveTo(L, Math.max(0,T)); ctx.lineTo(L, Math.min(H,B)); ctx.stroke();
-  }
-  // right wall
-  if(R>0 && R<W+wallW){
-    ctx.beginPath(); ctx.moveTo(R, Math.max(0,T)); ctx.lineTo(R, Math.min(H,B)); ctx.stroke();
-  }
-  // top wall
-  if(T>-wallW && T<H){
-    ctx.beginPath(); ctx.moveTo(Math.max(0,L), T); ctx.lineTo(Math.min(W,R), T); ctx.stroke();
-  }
-  // bottom wall
-  if(B>0 && B<H+wallW){
-    ctx.beginPath(); ctx.moveTo(Math.max(0,L), B); ctx.lineTo(Math.min(W,R), B); ctx.stroke();
-  }
-
-  // corner glow dots
-  ctx.fillStyle = `rgba(120,210,255,${0.8*pulse})`;
-  ctx.shadowBlur = 30; ctx.shadowColor = '#80d4ff';
-  for(const [cx,cy] of [[L,T],[R,T],[L,B],[R,B]]){
-    if(cx>-20&&cx<W+20&&cy>-20&&cy<H+20){
-      ctx.beginPath(); ctx.arc(cx,cy,8,0,Math.PI*2); ctx.fill();
+  if(m.mechanic==='minecart'){
+    // periodic mine cart every 8s
+    if(!h.carts) h.carts=[];
+    if(!h.cartSpawn) h.cartSpawn=0;
+    h.cartSpawn-=dt;
+    if(h.cartSpawn<=0){
+      h.cartSpawn=8;
+      const y=player.y+rand(-200,200);
+      h.carts.push({x:-MAP_HW-100,y,w:80,h:30,spd:500});
+    }
+    for(let i=h.carts.length-1;i>=0;i--){
+      const c=h.carts[i]; c.x+=c.spd*dt;
+      if(c.x>MAP_HW+200){ h.carts.splice(i,1); continue; }
+      if(Math.abs(player.x-c.x)<c.w&&Math.abs(player.y-c.y)<c.h){
+        player.takeDamage(15*(1-player.defense));
+      }
     }
   }
+  if(m.mechanic==='fire'){
+    if(!h.fireZones) h.fireZones=[];
+    if(!h.fireSpawn) h.fireSpawn=0;
+    h.fireSpawn-=dt;
+    if(h.fireSpawn<=0){
+      h.fireSpawn=5;
+      for(let i=0;i<3;i++){
+        h.fireZones.push({x:player.x+rand(-250,250),y:player.y+rand(-250,250),r:50,life:3,warn:1.5});
+      }
+    }
+    for(let i=h.fireZones.length-1;i>=0;i--){
+      const z=h.fireZones[i]; z.life-=dt; z.warn-=dt;
+      if(z.life<=0){ h.fireZones.splice(i,1); continue; }
+      if(z.warn<=0&&dist(player,z)<z.r+player.r){
+        player.takeDamage(8*dt*(1-player.defense));
+      }
+    }
+  }
+  if(m.mechanic==='holylight'){
+    if(!h.holyZones) h.holyZones=[];
+    if(!h.holySpawn) h.holySpawn=0;
+    h.holySpawn-=dt;
+    if(h.holySpawn<=0){
+      h.holySpawn=6;
+      for(let i=0;i<2;i++){
+        h.holyZones.push({x:player.x+rand(-200,200),y:player.y+rand(-200,200),r:60,life:4,warn:2});
+      }
+    }
+    for(let i=h.holyZones.length-1;i>=0;i--){
+      const z=h.holyZones[i]; z.life-=dt; z.warn-=dt;
+      if(z.life<=0){ h.holyZones.splice(i,1); continue; }
+      if(z.warn<=0&&dist(player,z)<z.r+player.r){
+        player.takeDamage(10*dt*(1-player.defense));
+      }
+    }
+  }
+  if(m.mechanic==='timestop'){
+    if(!h.freezeCD) h.freezeCD=12;
+    h.freezeCD-=dt;
+    if(h.freezeCD<=0&&!h.frozen){
+      h.frozen=true; h.freezeDur=2.5;
+      roundBanner={text:'⏸ 时间冻结! ⏸',timer:2};
+    }
+    if(h.frozen){
+      h.freezeDur-=dt;
+      if(h.freezeDur<=0){ h.frozen=false; h.freezeCD=12; }
+    }
+  }
+  if(m.mechanic==='mirror'){
+    if(!h.mirrorCD) h.mirrorCD=15;
+    h.mirrorCD-=dt;
+    if(h.mirrorCD<=0&&!h.mirrorClone){
+      h.mirrorCD=15;
+      const clone=new Enemy(player.x+rand(-100,100),player.y+rand(-100,100),3,gameTime);
+      clone.hp=player.maxHp*0.6; clone.maxHp=clone.hp;
+      clone.spd=player.speed*0.8; clone.col='#aa00aa';
+      clone.name='镜像分身'; clone.isMirror=true;
+      enemies.push(clone);
+      roundBanner={text:'⚠ 镜像分身出现! ⚠',timer:2};
+    }
+  }
+}
+
+// ── draw functions ───────────────────────────────────────────────────
+function drawBg(){
+  const m=MAPS[selectedMapIdx];
+  ctx.fillStyle=m.bgCol; ctx.fillRect(0,0,W,H);
+
+  const leftX=-MAP_HW-camera.x, rightX=MAP_HW-camera.x;
+  const topY=-MAP_HH-camera.y, botY=MAP_HH-camera.y;
+
+  ctx.fillStyle='rgba(0,0,0,0.55)';
+  if(leftX>0) ctx.fillRect(0,0,leftX,H);
+  if(rightX<W) ctx.fillRect(rightX,0,W-rightX,H);
+  if(topY>0) ctx.fillRect(leftX,0,rightX-leftX,topY);
+  if(botY<H) ctx.fillRect(leftX,botY,rightX-leftX,H-botY);
+
+  // grid
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(Math.max(0,leftX),Math.max(0,topY),
+    Math.min(W,rightX)-Math.max(0,leftX),Math.min(H,botY)-Math.max(0,topY));
+  ctx.clip();
+  ctx.strokeStyle=m.gridCol; ctx.lineWidth=1;
+  const SZ=64, ox=(-camera.x)%SZ, oy=(-camera.y)%SZ;
+  for(let x=ox;x<W;x+=SZ){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+  for(let y=oy;y<H;y+=SZ){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
   ctx.restore();
+
+  // walls
+  const t=Date.now()/1000, pulse=0.6+0.4*Math.sin(t*2);
+  ctx.save();
+  ctx.shadowBlur=24*pulse; ctx.shadowColor=m.wallCol;
+  ctx.strokeStyle=m.wallCol.replace(')',`,${0.6*pulse})`).includes('rgba')?m.wallCol:`${m.wallCol}`;
+  ctx.globalAlpha=0.6*pulse;
+  ctx.lineWidth=6;
+  const L=leftX,R=rightX,T=topY,B=botY;
+  if(L>-6&&L<W){ctx.beginPath();ctx.moveTo(L,Math.max(0,T));ctx.lineTo(L,Math.min(H,B));ctx.stroke();}
+  if(R>0&&R<W+6){ctx.beginPath();ctx.moveTo(R,Math.max(0,T));ctx.lineTo(R,Math.min(H,B));ctx.stroke();}
+  if(T>-6&&T<H){ctx.beginPath();ctx.moveTo(Math.max(0,L),T);ctx.lineTo(Math.min(W,R),T);ctx.stroke();}
+  if(B>0&&B<H+6){ctx.beginPath();ctx.moveTo(Math.max(0,L),B);ctx.lineTo(Math.min(W,R),B);ctx.stroke();}
+  ctx.restore();
+
+  // draw map hazards
+  drawMapHazards();
+}
+
+function drawMapHazards(){
+  const m=MAPS[selectedMapIdx];
+  const h=mapHazards;
+  if(m.mechanic==='minecart'&&h.carts){
+    for(const c of h.carts){
+      const sx=c.x-camera.x, sy=c.y-camera.y;
+      ctx.fillStyle='#887744'; ctx.fillRect(sx-c.w/2,sy-c.h/2,c.w,c.h);
+      ctx.fillStyle='#554422'; ctx.fillRect(sx-c.w/2+5,sy-c.h/2+5,c.w-10,c.h-10);
+      // track line
+      ctx.strokeStyle='rgba(136,119,68,0.3)'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(0,sy); ctx.lineTo(W,sy); ctx.stroke();
+    }
+  }
+  if(m.mechanic==='fire'&&h.fireZones){
+    for(const z of h.fireZones){
+      const sx=z.x-camera.x, sy=z.y-camera.y;
+      if(z.warn>0){
+        ctx.strokeStyle='rgba(255,100,0,0.5)'; ctx.lineWidth=2; ctx.setLineDash([4,4]);
+        ctx.beginPath(); ctx.arc(sx,sy,z.r,0,Math.PI*2); ctx.stroke();
+        ctx.setLineDash([]);
+      } else {
+        ctx.fillStyle='rgba(255,60,0,0.3)';
+        ctx.beginPath(); ctx.arc(sx,sy,z.r,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle='rgba(255,200,0,0.15)';
+        ctx.beginPath(); ctx.arc(sx,sy,z.r*0.6,0,Math.PI*2); ctx.fill();
+      }
+    }
+  }
+  if(m.mechanic==='holylight'&&h.holyZones){
+    for(const z of h.holyZones){
+      const sx=z.x-camera.x, sy=z.y-camera.y;
+      if(z.warn>0){
+        ctx.strokeStyle='rgba(200,180,255,0.4)'; ctx.lineWidth=2; ctx.setLineDash([6,4]);
+        ctx.beginPath(); ctx.arc(sx,sy,z.r,0,Math.PI*2); ctx.stroke();
+        ctx.setLineDash([]);
+      } else {
+        ctx.fillStyle='rgba(200,180,255,0.25)';
+        ctx.beginPath(); ctx.arc(sx,sy,z.r,0,Math.PI*2); ctx.fill();
+      }
+    }
+  }
+  if(m.mechanic==='current'){
+    // draw current arrows
+    ctx.globalAlpha=0.15; ctx.fillStyle='#44aaaa';
+    const t=Date.now()/1000;
+    for(let i=0;i<8;i++){
+      const ax=((i*120+t*40)%W), ay=((i*90+t*15)%H);
+      ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(ax+20,ay+5); ctx.lineTo(ax,ay+10); ctx.fill();
+    }
+    ctx.globalAlpha=1;
+  }
+  if(m.mechanic==='timestop'&&h.frozen){
+    ctx.fillStyle='rgba(100,150,255,0.1)'; ctx.fillRect(0,0,W,H);
+  }
 }
 
 function drawLightning(){
@@ -1173,27 +1308,13 @@ function drawLightning(){
     ctx.strokeStyle='#aabbff'; ctx.lineWidth=2.5;
     ctx.shadowBlur=14; ctx.shadowColor='#4466ff';
     ctx.beginPath(); ctx.moveTo(sx1,sy1);
-    const steps=7;
-    for(let s=1;s<steps;s++){
-      const t=s/steps;
-      ctx.lineTo(lerp(sx1,sx2,t)+rand(-18,18), lerp(sy1,sy2,t)+rand(-18,18));
+    for(let s=1;s<7;s++){
+      const t=s/7;
+      ctx.lineTo(lerp(sx1,sx2,t)+rand(-18,18),lerp(sy1,sy2,t)+rand(-18,18));
     }
     ctx.lineTo(sx2,sy2); ctx.stroke();
     ctx.restore();
   }
-}
-
-function drawGarlicAura(){
-  const gw=player.weapons.find(w=>w.id==='garlic');
-  if(!gw) return;
-  const sx=player.x-camera.x, sy=player.y-camera.y;
-  ctx.save();
-  const alpha=0.15+(gw._pulse>0?gw._pulse/.2*.35:0);
-  ctx.strokeStyle=`rgba(255,255,120,${alpha})`;
-  ctx.lineWidth=2; ctx.setLineDash([6,6]);
-  ctx.beginPath(); ctx.arc(sx,sy,gw.radius,0,Math.PI*2); ctx.stroke();
-  ctx.restore();
-  if(gw._pulse>0) gw._pulse-=1/60;
 }
 
 function drawHUD(){
@@ -1215,49 +1336,50 @@ function drawHUD(){
   ctx.fillStyle='#00cc66'; ctx.fillRect(xx,xy,xw*xpRatio,xh);
   ctx.strokeStyle='#444'; ctx.strokeRect(xx,xy,xw,xh);
 
-  // Level
-  ctx.fillStyle='#ffdd44'; ctx.font='bold 15px Courier New'; ctx.textAlign='left';
-  ctx.fillText(`Lv.${player.level}`,hx+xw+8,hy+14);
+  // Level + character name
+  ctx.fillStyle='#ffdd44'; ctx.font='bold 14px Courier New'; ctx.textAlign='left';
+  const c=CHARACTERS[selectedCharKey];
+  ctx.fillText(`${c.name} Lv.${player.level}`,hx+xw+8,hy+14);
 
-  // ── Round display (center top) ──
-  // round countdown bar
-  const rw=180, rh=20, rx=(W-rw)/2, ry=8;
-  const rProgress=clamp(roundTimer/ROUND_DURATION,0,1);
+  // Time + map
+  const m=MAPS[selectedMapIdx];
+  const totalSec=m.twoBoss?600:180;
+  const secsLeft=Math.max(0,Math.ceil(totalSec-gameTime));
+  const mins=Math.floor(secsLeft/60), secs=secsLeft%60;
+  ctx.fillStyle='#ffffff'; ctx.font='bold 12px Courier New'; ctx.textAlign='center';
+  ctx.fillText(`${m.name}  ${mins}:${secs.toString().padStart(2,'0')}`,W/2,20);
+
+  // time bar
+  const rw=180,rh=8,rx=(W-rw)/2,ry=26;
   ctx.fillStyle='#1a1a3a'; ctx.fillRect(rx,ry,rw,rh);
-  // color shifts from green → yellow → red as time runs out
-  const timeLeft=1-rProgress;
-  const barCol=timeLeft>0.4?'#44cc44':timeLeft>0.2?'#ccaa00':'#cc2222';
-  ctx.fillStyle=barCol; ctx.fillRect(rx,ry,rw*timeLeft,rh);
+  const timeRatio=clamp(gameTime/totalSec,0,1);
+  const barCol=timeRatio<0.6?'#44cc44':timeRatio<0.8?'#ccaa00':'#cc2222';
+  ctx.fillStyle=barCol; ctx.fillRect(rx,ry,rw*timeRatio,rh);
   ctx.strokeStyle='#555'; ctx.lineWidth=1; ctx.strokeRect(rx,ry,rw,rh);
 
-  // round label
-  const secsLeft=Math.ceil(ROUND_DURATION-roundTimer);
-  ctx.fillStyle='#ffffff'; ctx.font='bold 12px Courier New'; ctx.textAlign='center';
-  ctx.fillText(`第 ${currentRound} / ${TOTAL_ROUNDS} 回合   ${secsLeft}s`,W/2,ry+14);
+  // Crystals + score
+  ctx.fillStyle='#88ddff'; ctx.font='14px Courier New'; ctx.textAlign='right';
+  ctx.fillText(`晶石: ${save.crystals}`,W-10,20);
+  ctx.fillStyle='#ffaa00'; ctx.font='12px Courier New';
+  ctx.fillText(`${score} 分  敌人:${enemies.length}`,W-10,38);
 
-  // Score
-  ctx.fillStyle='#ffaa00'; ctx.font='14px Courier New'; ctx.textAlign='right';
-  ctx.fillText(`${score} 分`,W-10,20);
-  ctx.fillStyle='#888';ctx.font='12px Courier New';
-  ctx.fillText(`敌人:${enemies.length}`,W-10,38);
-
-  // Weapons list
+  // Skills list
   ctx.textAlign='left';
-  player.weapons.forEach((w,i)=>{
+  const activeSkills=player.weapons.filter(w=>SKILLS[w.id]&&SKILLS[w.id].type==='active');
+  activeSkills.forEach((w,i)=>{
     const wy=H-12-i*20;
-    ctx.fillStyle='rgba(0,0,0,0.5)';
-    ctx.fillRect(6,wy-14,160,18);
-    ctx.fillStyle=WEAPONS[w.id].color||'#ccc';
-    ctx.font='13px Courier New';
-    ctx.fillText(`[${WEAPONS[w.id].icon}] ${WEAPONS[w.id].name} Lv.${w.level}`,10,wy);
+    const def=SKILLS[w.id];
+    ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(6,wy-14,180,18);
+    ctx.fillStyle=def.color||'#ccc'; ctx.font='13px Courier New';
+    ctx.fillText(`${def.icon} ${def.name} ×${w.stack}`,10,wy);
   });
 
-  // Controls hint (fade out after 10 sec)
-  if(gameTime<12){
-    const a=clamp((12-gameTime)/3,0,1);
+  // Controls hint
+  if(gameTime<10){
+    const a=clamp((10-gameTime)/3,0,1);
     ctx.globalAlpha=a;
-    ctx.fillStyle='#aaaaaa'; ctx.font='12px Courier New'; ctx.textAlign='center';
-    ctx.fillText('WASD / 方向键 移动   自动攻击   收集绿色经验石升级',W/2,H-8);
+    ctx.fillStyle='#aaa'; ctx.font='12px Courier New'; ctx.textAlign='center';
+    ctx.fillText('WASD/方向键移动  技能自动释放  收集经验石升级',W/2,H-8);
     ctx.globalAlpha=1;
   }
 }
@@ -1266,59 +1388,41 @@ function drawBossBar(){
   const boss=enemies.find(e=>e.isBoss);
   if(!boss) return;
   const bw=500,bh=26,bx=(W-bw)/2,by=H-50;
-  // outer border glow
   ctx.save();
   ctx.shadowBlur=16; ctx.shadowColor='#ff0044';
-  ctx.fillStyle='#110008';
-  ctx.fillRect(bx-3,by-3,bw+6,bh+6);
+  ctx.fillStyle='#110008'; ctx.fillRect(bx-3,by-3,bw+6,bh+6);
   ctx.shadowBlur=0;
-  // background
   ctx.fillStyle='#220011'; ctx.fillRect(bx,by,bw,bh);
-  // fill bar with gradient
   const ratio=clamp(boss.hp/boss.maxHp,0,1);
   const g=ctx.createLinearGradient(bx,by,bx+bw,by);
   g.addColorStop(0,'#880022'); g.addColorStop(0.5,'#ff2244'); g.addColorStop(1,'#ff6644');
   ctx.fillStyle=g; ctx.fillRect(bx,by,bw*ratio,bh);
-  // charge pulse overlay
-  if(boss.isCharging){
-    ctx.fillStyle='rgba(255,100,0,0.35)';
-    ctx.fillRect(bx,by,bw*ratio,bh);
-  }
-  // border
   ctx.strokeStyle='#ff0044'; ctx.lineWidth=2; ctx.strokeRect(bx,by,bw,bh);
-  // text
   ctx.fillStyle='#fff'; ctx.font='bold 13px Courier New'; ctx.textAlign='center';
-  ctx.fillText(`★ BOSS 啵刚 ★   ${Math.ceil(boss.hp)} / ${boss.maxHp}`,W/2,by+18);
+  ctx.fillText(`★ ${boss.name} ★  ${Math.ceil(boss.hp)} / ${boss.maxHp}`,W/2,by+18);
   ctx.restore();
 }
 
 function drawRoundBanner(){
   if(!roundBanner||roundBanner.timer<=0) return;
   const alpha=clamp(roundBanner.timer/0.6,0,1);
-  ctx.save();
-  ctx.globalAlpha=alpha;
-  ctx.fillStyle='rgba(0,0,0,0.55)';
-  ctx.fillRect(0,H/2-40,W,80);
-  ctx.fillStyle='#ffdd44';
-  ctx.font='bold 36px Courier New'; ctx.textAlign='center';
+  ctx.save(); ctx.globalAlpha=alpha;
+  ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0,H/2-40,W,80);
+  ctx.fillStyle='#ffdd44'; ctx.font='bold 32px Courier New'; ctx.textAlign='center';
   ctx.shadowBlur=20; ctx.shadowColor='#ffaa00';
-  ctx.fillText(roundBanner.text, W/2, H/2+12);
-  ctx.shadowBlur=0;
-  ctx.restore();
+  ctx.fillText(roundBanner.text,W/2,H/2+10);
+  ctx.shadowBlur=0; ctx.restore();
 }
 
 function drawLevelUpScreen(){
   ctx.fillStyle='rgba(0,0,0,0.75)'; ctx.fillRect(0,0,W,H);
-
-  ctx.fillStyle='#ffdd44'; ctx.font='bold 26px Courier New'; ctx.textAlign='center';
+  ctx.fillStyle='#ffdd44'; ctx.font='bold 24px Courier New'; ctx.textAlign='center';
   ctx.shadowBlur=20; ctx.shadowColor='#ffaa00';
   ctx.fillText('✦ 升级! 选择一项强化 ✦',W/2,H/2-148);
   ctx.shadowBlur=0;
-
-  const cw=210,ch=240,gap=30;
+  const cw=210,ch=220,gap=30;
   const total=cw*3+gap*2;
   const sx=(W-total)/2, sy=(H-ch)/2-20;
-
   upgradeChoices.forEach((c,i)=>{
     const cx=sx+i*(cw+gap);
     const hover=mouse.x>=cx&&mouse.x<=cx+cw&&mouse.y>=sy&&mouse.y<=sy+ch;
@@ -1326,43 +1430,27 @@ function drawLevelUpScreen(){
     ctx.strokeStyle=hover?c.col||'#6688cc':'#3344aa';
     ctx.lineWidth=hover?2.5:1.5;
     roundRect(cx,sy,cw,ch,10); ctx.fill(); ctx.stroke();
-
-    ctx.fillStyle=c.col||'#6688cc';
-    ctx.globalAlpha=0.25;
-    ctx.beginPath(); ctx.arc(cx+cw/2,sy+52,30,0,Math.PI*2); ctx.fill();
-    ctx.globalAlpha=1;
-    ctx.fillStyle=c.col||'#fff';
-    ctx.font='bold 28px Courier New'; ctx.textAlign='center';
-    ctx.fillText(c.icon,cx+cw/2,sy+64);
-
-    ctx.fillStyle='#ffffff'; ctx.font='bold 14px Courier New';
-    ctx.fillText(c.name,cx+cw/2,sy+100);
-
-    const badge=c.type==='wup'?'升级':'新武器';
-    if(c.type!=='stat'){
-      ctx.fillStyle=c.type==='wup'?'#224488':'#224422';
-      roundRect(cx+cw/2-28,sy+106,56,18,4); ctx.fill();
-      ctx.fillStyle='#aaccff'; ctx.font='10px Courier New';
-      ctx.fillText(badge,cx+cw/2,sy+119);
-    }
-
+    ctx.fillStyle=c.col||'#6688cc'; ctx.globalAlpha=0.25;
+    ctx.beginPath(); ctx.arc(cx+cw/2,sy+50,28,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=1; ctx.fillStyle=c.col||'#fff';
+    ctx.font='bold 26px Courier New'; ctx.textAlign='center';
+    ctx.fillText(c.icon,cx+cw/2,sy+60);
+    ctx.fillStyle='#fff'; ctx.font='bold 13px Courier New';
+    ctx.fillText(c.name,cx+cw/2,sy+95);
     ctx.fillStyle='#aaaacc'; ctx.font='12px Courier New';
-    const maxW=cw-20;
-    let line='', lines=[];
-    for(const ch of c.desc){
-      const test=line+ch;
-      if(ctx.measureText(test).width>maxW){ lines.push(line); line=ch; }
-      else line=test;
+    const maxW2=cw-20; let line='',lines=[];
+    for(const ch2 of c.desc){
+      const test=line+ch2;
+      if(ctx.measureText(test).width>maxW2){lines.push(line);line=ch2;}else line=test;
     }
     if(line) lines.push(line);
-    lines.forEach((l,li)=> ctx.fillText(l,cx+cw/2,sy+140+li*18));
-
-    ctx.fillStyle=hover?'#ffdd44':'#445588';
-    ctx.font='11px Courier New';
+    lines.forEach((l,li)=>ctx.fillText(l,cx+cw/2,sy+118+li*16));
+    ctx.fillStyle=hover?'#ffdd44':'#445588'; ctx.font='11px Courier New';
     ctx.fillText('点击选择',cx+cw/2,sy+ch-12);
   });
 }
 
+// ── title screen ─────────────────────────────────────────────────────
 function drawTitle(){
   ctx.fillStyle='#080812'; ctx.fillRect(0,0,W,H);
   const t=Date.now()/1000;
@@ -1372,66 +1460,160 @@ function drawTitle(){
     const sz=.5+Math.sin(t+i)*.5;
     ctx.beginPath(); ctx.arc(bx,by,sz,0,Math.PI*2); ctx.fill();
   }
-
   ctx.textAlign='center';
-  ctx.font='bold 58px Courier New';
-  ctx.fillStyle='#ff4466';
-  ctx.shadowBlur=30; ctx.shadowColor='#ff0000';
-  ctx.fillText('魔女贝拉之旅',W/2,130);
+  ctx.font='bold 52px Courier New'; ctx.fillStyle='#44aaff';
+  ctx.shadowBlur=30; ctx.shadowColor='#2288ff';
+  ctx.fillText('Souler 魔法特遣队',W/2,160);
   ctx.shadowBlur=0;
-
   ctx.font='16px Courier New'; ctx.fillStyle='#8888aa';
-  ctx.fillText('Bella the Witch — Survivor\'s Journey',W/2,168);
-
+  ctx.fillText('Souler Magic Task Force',W/2,200);
   ctx.fillStyle='#aaaacc'; ctx.font='14px Courier New';
   const lines=[
-    'WASD / 方向键  移动角色',
-    '武器自动攻击',
-    '消灭怪物掉落经验宝石，升级时选择强化',
-    `共 ${TOTAL_ROUNDS} 回合，每回合 ${ROUND_DURATION} 秒`,
-    '存活过所有回合即获胜!',
+    '选择角色和地图，消灭怪物升级技能',
+    '击败BOSS通关解锁新角色和地图',
+    '收集晶石，挑战8张独特地图!',
   ];
-  lines.forEach((l,i)=>ctx.fillText(l,W/2,250+i*28));
-
-  ctx.font='14px Courier New'; ctx.fillStyle='#555577';
-  ctx.fillText('[W]魔法棒  [K]飞刀  [G]大蒜  [L]闪电环  [锤]牛牛锤子  [C]十字镖',W/2,420);
-
+  lines.forEach((l,i)=>ctx.fillText(l,W/2,280+i*28));
   if(Math.floor(Date.now()/550)%2===0){
     ctx.fillStyle='#ffdd44'; ctx.font='bold 20px Courier New';
     ctx.shadowBlur=10; ctx.shadowColor='#ffaa00';
-    ctx.fillText('按空格键 或 点击屏幕 开始游戏',W/2,475);
+    ctx.fillText('按空格键 或 点击屏幕 开始',W/2,420);
     ctx.shadowBlur=0;
   }
+}
+
+// ── character select screen ──────────────────────────────────────────
+function drawCharSelect(){
+  ctx.fillStyle='#080812'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.font='bold 30px Courier New'; ctx.fillStyle='#44aaff';
+  ctx.shadowBlur=20; ctx.shadowColor='#2288ff';
+  ctx.fillText('选择角色',W/2,60);
+  ctx.shadowBlur=0;
+  ctx.fillStyle='#88ddff'; ctx.font='14px Courier New';
+  ctx.fillText(`晶石: ${save.crystals}`,W/2,90);
+
+  const chars=Object.entries(CHARACTERS);
+  const cw=140,ch=180,gap=16;
+  const total=cw*chars.length+gap*(chars.length-1);
+  const sx=(W-total)/2, sy=120;
+  chars.forEach(([key,c],i)=>{
+    const cx=sx+i*(cw+gap);
+    const unlocked=save.unlockedChars.includes(key);
+    const hover=unlocked&&mouse.x>=cx&&mouse.x<=cx+cw&&mouse.y>=sy&&mouse.y<=sy+ch;
+    ctx.fillStyle=unlocked?(hover?'#1a2244':'#0e1230'):'#0a0a15';
+    ctx.strokeStyle=unlocked?(hover?c.glowCol:'#334466'):'#222233';
+    ctx.lineWidth=hover?2.5:1.5;
+    roundRect(cx,sy,cw,ch,10); ctx.fill(); ctx.stroke();
+    // image
+    const img=charImages[c.imgKey];
+    if(img&&unlocked){
+      ctx.save();
+      ctx.shadowBlur=0; ctx.shadowColor='transparent';
+      ctx.globalAlpha=1; ctx.filter='none'; ctx.globalCompositeOperation='source-over';
+      ctx.drawImage(img,cx+cw/2-28,sy+12,56,56);
+      ctx.restore();
+    } else {
+      ctx.fillStyle=unlocked?c.glowCol:'#333';
+      ctx.beginPath(); ctx.arc(cx+cw/2,sy+40,22,0,Math.PI*2); ctx.fill();
+    }
+    ctx.fillStyle=unlocked?'#fff':'#555'; ctx.font='bold 14px Courier New';
+    ctx.fillText(c.name,cx+cw/2,sy+86);
+    ctx.fillStyle=unlocked?c.glowCol:'#444'; ctx.font='11px Courier New';
+    ctx.fillText(c.cls,cx+cw/2,sy+104);
+    if(unlocked){
+      ctx.fillStyle='#aaa'; ctx.font='11px Courier New';
+      ctx.fillText(c.desc,cx+cw/2,sy+122);
+      const sk=SKILLS[c.startSkill];
+      if(sk){
+        ctx.fillStyle=sk.color; ctx.font='10px Courier New';
+        ctx.fillText(`${sk.icon} ${sk.name}`,cx+cw/2,sy+140);
+      }
+    } else {
+      ctx.fillStyle='#555'; ctx.font='11px Courier New';
+      const mapIdx=c.unlockMap;
+      ctx.fillText(`通关${MAPS[mapIdx].name}解锁`,cx+cw/2,sy+130);
+    }
+    if(hover){
+      ctx.fillStyle='#ffdd44'; ctx.font='11px Courier New';
+      ctx.fillText('点击选择',cx+cw/2,sy+ch-10);
+    }
+  });
+}
+
+// ── map select screen ────────────────────────────────────────────────
+function drawMapSelect(){
+  ctx.fillStyle='#080812'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  const c=CHARACTERS[selectedCharKey];
+  ctx.font='bold 26px Courier New'; ctx.fillStyle='#44aaff';
+  ctx.shadowBlur=15; ctx.shadowColor='#2288ff';
+  ctx.fillText('选择地图',W/2,50);
+  ctx.shadowBlur=0;
+  ctx.fillStyle='#aaa'; ctx.font='13px Courier New';
+  ctx.fillText(`角色: ${c.name} (${c.cls})    晶石: ${save.crystals}`,W/2,78);
+
+  const cols=4, rows=2;
+  const cw=180, ch=100, gap=16;
+  const totalW=cw*cols+gap*(cols-1);
+  const baseX=(W-totalW)/2, baseY=100;
+  MAPS.forEach((m,i)=>{
+    const row=Math.floor(i/cols), col=i%cols;
+    const cx=baseX+col*(cw+gap), cy=baseY+row*(ch+gap);
+    const unlocked=i===0||save.clearedMaps.includes(i-1);
+    const cleared=save.clearedMaps.includes(i);
+    const hover=unlocked&&mouse.x>=cx&&mouse.x<=cx+cw&&mouse.y>=cy&&mouse.y<=cy+ch;
+    ctx.fillStyle=unlocked?(hover?'#1a2244':'#0e1230'):'#0a0a15';
+    ctx.strokeStyle=unlocked?(hover?m.wallCol:'#334466'):'#222233';
+    ctx.lineWidth=hover?2.5:1.5;
+    roundRect(cx,cy,cw,ch,8); ctx.fill(); ctx.stroke();
+    // map number
+    ctx.fillStyle=unlocked?'#fff':'#555'; ctx.font='bold 16px Courier New';
+    ctx.fillText(`${i+1}. ${m.name}`,cx+cw/2,cy+24);
+    if(unlocked){
+      ctx.fillStyle='#aaa'; ctx.font='11px Courier New';
+      ctx.fillText(`BOSS: ${m.bossName}`,cx+cw/2,cy+44);
+      ctx.fillStyle='#88ddff';
+      const dur=m.twoBoss?'10分钟':'3分钟';
+      ctx.fillText(`时长${dur}  奖励${m.crystals}晶石`,cx+cw/2,cy+60);
+      if(cleared){
+        ctx.fillStyle='#44ff44'; ctx.font='bold 12px Courier New';
+        ctx.fillText('已通关 ✓',cx+cw/2,cy+80);
+      } else if(hover){
+        ctx.fillStyle='#ffdd44'; ctx.font='11px Courier New';
+        ctx.fillText('点击开始',cx+cw/2,cy+80);
+      }
+    } else {
+      ctx.fillStyle='#555'; ctx.font='11px Courier New';
+      ctx.fillText('通关前一关解锁',cx+cw/2,cy+50);
+    }
+  });
+  // back button
+  ctx.fillStyle='#334466'; roundRect(20,H-50,100,30,6); ctx.fill();
+  ctx.fillStyle='#aaa'; ctx.font='13px Courier New'; ctx.textAlign='center';
+  ctx.fillText('← 返回',70,H-30);
 }
 
 function drawGameOver(){
   ctx.fillStyle='rgba(0,0,0,0.88)'; ctx.fillRect(0,0,W,H);
   ctx.textAlign='center';
-  ctx.font='bold 52px Courier New'; ctx.fillStyle='#ff3344';
+  ctx.font='bold 48px Courier New'; ctx.fillStyle='#ff3344';
   ctx.shadowBlur=25; ctx.shadowColor='#ff0000';
-  ctx.fillText('游戏结束',W/2,190);
+  ctx.fillText('任务失败',W/2,180);
   ctx.shadowBlur=0;
-
-  ctx.fillStyle='#ffffff'; ctx.font='20px Courier New';
-  ctx.fillText(`撑到第 ${currentRound} / ${TOTAL_ROUNDS} 回合`,W/2,258);
-  ctx.fillText(`最终分数:  ${score}`,W/2,292);
-  ctx.fillText(`达到等级:  ${player.level}`,W/2,326);
-  ctx.fillText(`消灭怪物:  约 ${Math.floor(score/15)} 只`,W/2,360);
-
-  const pct=Math.round((currentRound-1)/TOTAL_ROUNDS*100);
-  ctx.fillStyle='#ffaa44'; ctx.font='18px Courier New';
-  ctx.fillText(`完成进度: ${pct}%`,W/2,400);
-
+  ctx.fillStyle='#fff'; ctx.font='20px Courier New';
+  ctx.fillText(`地图: ${MAPS[selectedMapIdx].name}`,W/2,240);
+  ctx.fillText(`存活时间: ${Math.floor(gameTime)}秒`,W/2,274);
+  ctx.fillText(`最终分数: ${score}`,W/2,308);
+  ctx.fillText(`达到等级: ${player.level}`,W/2,342);
   if(Math.floor(Date.now()/550)%2===0){
     ctx.fillStyle='#aaaacc'; ctx.font='bold 18px Courier New';
-    ctx.fillText('按空格键 或 点击屏幕 重新开始',W/2,465);
+    ctx.fillText('点击返回角色选择',W/2,430);
   }
 }
 
 function drawVictory(){
   ctx.fillStyle='rgba(0,0,20,0.92)'; ctx.fillRect(0,0,W,H);
-
-  // Star burst effect
   const t=Date.now()/1000;
   ctx.save();
   for(let i=0;i<12;i++){
@@ -1439,71 +1621,60 @@ function drawVictory(){
     const len=120+Math.sin(t*2+i)*30;
     ctx.strokeStyle=`rgba(255,220,50,${0.2+Math.sin(t+i)*0.15})`;
     ctx.lineWidth=2;
-    ctx.beginPath();
-    ctx.moveTo(W/2,H/2-60);
-    ctx.lineTo(W/2+Math.cos(a)*len, H/2-60+Math.sin(a)*len);
-    ctx.stroke();
+    ctx.beginPath();ctx.moveTo(W/2,H/2-60);
+    ctx.lineTo(W/2+Math.cos(a)*len,H/2-60+Math.sin(a)*len);ctx.stroke();
   }
   ctx.restore();
-
   ctx.textAlign='center';
-  ctx.font='bold 62px Courier New';
-  ctx.fillStyle='#ffdd44';
+  ctx.font='bold 52px Courier New'; ctx.fillStyle='#ffdd44';
   ctx.shadowBlur=40; ctx.shadowColor='#ffaa00';
-  ctx.fillText('胜 利!',W/2,200);
+  ctx.fillText('任务完成!',W/2,180);
   ctx.shadowBlur=0;
-
-  ctx.font='22px Courier New'; ctx.fillStyle='#aaddff';
-  ctx.fillText('你存活过了全部 16 回合!',W/2,258);
-
-  ctx.fillStyle='#ffffff'; ctx.font='18px Courier New';
-  ctx.fillText(`最终分数:  ${score}`,W/2,305);
-  ctx.fillText(`最终等级:  ${player.level}`,W/2,335);
-
-  // S+ rating for clear
-  ctx.fillStyle='#ffdd44'; ctx.font='bold 48px Courier New';
-  ctx.shadowBlur=20; ctx.shadowColor='#ffaa00';
-  ctx.fillText('评价: S+',W/2,405);
-  ctx.shadowBlur=0;
-
+  ctx.font='20px Courier New'; ctx.fillStyle='#aaddff';
+  ctx.fillText(`${MAPS[selectedMapIdx].name} 通关!`,W/2,230);
+  ctx.fillStyle='#fff'; ctx.font='18px Courier New';
+  ctx.fillText(`最终分数: ${score}`,W/2,275);
+  ctx.fillText(`最终等级: ${player.level}`,W/2,305);
+  ctx.fillStyle='#88ddff'; ctx.font='bold 20px Courier New';
+  ctx.fillText(`获得晶石: +${sessionCrystals}`,W/2,350);
+  // check unlocks
+  const newChar=Object.entries(CHARACTERS).find(([k,c])=>c.unlockMap===selectedMapIdx&&save.unlockedChars.includes(k));
+  if(newChar){
+    ctx.fillStyle='#ffaa44'; ctx.font='bold 18px Courier New';
+    ctx.fillText(`解锁新角色: ${newChar[1].name}!`,W/2,390);
+  }
   if(Math.floor(Date.now()/550)%2===0){
     ctx.fillStyle='#aaaacc'; ctx.font='bold 18px Courier New';
-    ctx.fillText('按空格键 或 点击屏幕 再玩一次',W/2,468);
+    ctx.fillText('点击返回角色选择',W/2,460);
   }
 }
 
-// ── main loop ─────────────────────────────────────────────────────────
+// ── main loop ────────────────────────────────────────────────────────
 function draw(){
   ctx.clearRect(0,0,W,H);
-
   if(state==='title'){ drawTitle(); return; }
+  if(state==='charselect'){ drawCharSelect(); return; }
+  if(state==='mapselect'){ drawMapSelect(); return; }
 
   drawBg();
   for(const g of gems) g.draw();
   for(const p of projectiles) p.draw();
-  drawGarlicAura();
   for(const e of enemies) e.draw();
   if(state==='playing'||state==='levelup') player.draw();
   for(const p of particles) p.draw();
   drawLightning();
-
-  // damage numbers
   for(const d of damageNums){
     const sx=d.x-camera.x, sy=d.y-camera.y;
-    ctx.save();
-    ctx.globalAlpha=clamp(d.life/d.maxL,0,1);
-    ctx.fillStyle='#ffee22';
-    ctx.font='bold 13px Courier New'; ctx.textAlign='center';
-    ctx.fillText(d.v,sx,sy);
-    ctx.restore();
+    ctx.save(); ctx.globalAlpha=clamp(d.life/d.maxL,0,1);
+    ctx.fillStyle='#ffee22'; ctx.font='bold 13px Courier New'; ctx.textAlign='center';
+    ctx.fillText(d.v,sx,sy); ctx.restore();
   }
-
   drawHUD();
   drawBossBar();
   drawRoundBanner();
   if(state==='levelup') drawLevelUpScreen();
   if(state==='gameover') drawGameOver();
-  if(state==='victory')  drawVictory();
+  if(state==='victory') drawVictory();
 }
 
 function loop(ts){
@@ -1514,7 +1685,6 @@ function loop(ts){
   requestAnimationFrame(loop);
 }
 
-// ── kick off ──────────────────────────────────────────────────────────
 state='title';
 lastTime=performance.now();
 requestAnimationFrame(loop);
