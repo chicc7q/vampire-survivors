@@ -42,47 +42,17 @@ function hexAlpha(hex,a){
 }
 
 // ── image loading ────────────────────────────────────────────────────
-// player.png (strip white/near-white bg)
-let playerImgReady=false, playerCanvas=null;
-(function(){
-  const img=new Image(); img.crossOrigin='anonymous';
-  img.onload=()=>{
-    const oc=document.createElement('canvas');
-    oc.width=img.width||128; oc.height=img.height||128;
-    const octx=oc.getContext('2d'); octx.drawImage(img,0,0);
-    try{
-      const id=octx.getImageData(0,0,oc.width,oc.height), d=id.data;
-      for(let i=0;i<d.length;i+=4){
-        if(d[i]>230&&d[i+1]>230&&d[i+2]>230) d[i+3]=0;
-      }
-      octx.putImageData(id,0,0);
-    }catch(e){}
-    playerCanvas=oc; playerImgReady=true;
-  };
-  img.src='player.png';
-})();
-// character PNGs (strip black bg)
+// character PNGs — transparent PNGs, no pixel manipulation needed
 const charImages={};
 const charImgFiles={
   xiaoxiaoyu:'xiaoxiaoyu.PNG', zhimoushi:'zhimoushi.PNG',
   yixiaoze:'yixiaoze.PNG', guanyiyi:'guanyiyi.PNG', nianrenbao:'nianrenbao.PNG'
 };
-function loadCharImg(key,src){
+for(const [k,src] of Object.entries(charImgFiles)){
   const img=new Image(); img.crossOrigin='anonymous';
-  img.onload=()=>{
-    const oc=document.createElement('canvas');
-    oc.width=img.width||128; oc.height=img.height||128;
-    const octx=oc.getContext('2d'); octx.drawImage(img,0,0);
-    try{
-      const id=octx.getImageData(0,0,oc.width,oc.height), d=id.data;
-      for(let i=0;i<d.length;i+=4){ if(d[i]<25&&d[i+1]<25&&d[i+2]<25) d[i+3]=0; }
-      octx.putImageData(id,0,0);
-    }catch(e){}
-    charImages[key]=oc;
-  };
+  img.onload=(function(key,im){return ()=>{charImages[key]=im;};})(k,img);
   img.src=src;
 }
-for(const [k,v] of Object.entries(charImgFiles)) loadCharImg(k,v);
 
 // ── save / load ──────────────────────────────────────────────────────
 function loadSave(){
@@ -785,14 +755,15 @@ class Player {
     grd.addColorStop(0,hexAlpha(gc,0.45)); grd.addColorStop(1,hexAlpha(gc,0));
     ctx.fillStyle=grd;
     ctx.beginPath(); ctx.arc(sx,sy,this.r*1.4,0,Math.PI*2); ctx.fill();
-    // FIX #7: always draw player.png image
+    // draw character image (each character uses their own PNG)
     ctx.shadowBlur=0;ctx.shadowColor='transparent';ctx.globalAlpha=1;
     ctx.globalCompositeOperation='source-over';ctx.filter='none';
-    if(playerImgReady&&playerCanvas){
-      if(Math.cos(this.facing)<0){ctx.translate(sx,sy);ctx.scale(-1,1);ctx.drawImage(playerCanvas,-size/2,-size/2,size,size);}
-      else ctx.drawImage(playerCanvas,sx-size/2,sy-size/2,size,size);
+    const charImg=charImages[this.charKey];
+    if(charImg){
+      if(Math.cos(this.facing)<0){ctx.translate(sx,sy);ctx.scale(-1,1);ctx.drawImage(charImg,-size/2,-size/2,size,size);}
+      else ctx.drawImage(charImg,sx-size/2,sy-size/2,size,size);
     } else {
-      // fallback circle
+      // fallback circle while image loads
       ctx.shadowBlur=15;ctx.shadowColor=gc;ctx.fillStyle=gc;
       ctx.beginPath();ctx.arc(sx,sy,this.r,0,Math.PI*2);ctx.fill();
     }
