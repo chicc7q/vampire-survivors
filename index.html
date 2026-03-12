@@ -89,14 +89,14 @@ const CHARACTERS={
 
 // ── map definitions ──────────────────────────────────────────────────
 const MAPS=[
-  {name:'翠绿平原',bgCol:'#1a2e1a',gridCol:'rgba(80,160,80,0.08)',wallCol:'#44cc44',floorCol:'#243a24',mechanic:'none',bossName:'草原巨蜥王',bossCol:'#338822',duration:180,crystals:100},
-  {name:'幽暗矿洞',bgCol:'#1a1a1a',gridCol:'rgba(120,120,120,0.08)',wallCol:'#888888',floorCol:'#252525',mechanic:'none',bossName:'矿石魔像',bossCol:'#777744',duration:180,crystals:100},
-  {name:'熔岩火山',bgCol:'#2a0a00',gridCol:'rgba(255,80,0,0.06)',wallCol:'#ff4400',floorCol:'#3a1a0a',mechanic:'fire',bossName:'熔岩领主',bossCol:'#cc4400',duration:180,crystals:100},
-  {name:'冰雪荒原',bgCol:'#0e1a2a',gridCol:'rgba(150,200,255,0.08)',wallCol:'#88ccff',floorCol:'#1a2a3a',mechanic:'ice',bossName:'霜冻女王',bossCol:'#44aaee',duration:180,crystals:100},
+  {name:'翠绿平原',bgCol:'#1a2e1a',gridCol:'rgba(80,160,80,0.08)',wallCol:'#44cc44',floorCol:'#243a24',mechanic:'none',bossName:'草原巨蜥王',bossCol:'#338822',duration:60,crystals:100},
+  {name:'幽暗矿洞',bgCol:'#1a1a1a',gridCol:'rgba(120,120,120,0.08)',wallCol:'#888888',floorCol:'#252525',mechanic:'none',bossName:'矿石魔像',bossCol:'#777744',duration:60,crystals:100},
+  {name:'熔岩火山',bgCol:'#2a0a00',gridCol:'rgba(255,80,0,0.06)',wallCol:'#ff4400',floorCol:'#3a1a0a',mechanic:'fire',bossName:'熔岩领主',bossCol:'#cc4400',duration:120,crystals:100},
+  {name:'冰雪荒原',bgCol:'#0e1a2a',gridCol:'rgba(150,200,255,0.08)',wallCol:'#88ccff',floorCol:'#1a2a3a',mechanic:'ice',bossName:'霜冻女王',bossCol:'#44aaee',duration:120,crystals:100},
   {name:'古老教堂',bgCol:'#1a0a2a',gridCol:'rgba(160,80,200,0.06)',wallCol:'#aa44dd',floorCol:'#2a1a3a',mechanic:'holylight',bossName:'堕落祭司',bossCol:'#8822aa',duration:180,crystals:200},
-  {name:'深海水晶城',bgCol:'#0a1a2a',gridCol:'rgba(60,180,180,0.08)',wallCol:'#22aaaa',floorCol:'#0a2a3a',mechanic:'current',bossName:'深渊鲸鱼王',bossCol:'#2266aa',duration:600,crystals:200,twoBoss:true,boss2Name:'深渊巨鲸',boss2Time:300},
-  {name:'云端钟楼',bgCol:'#1a2030',gridCol:'rgba(150,180,220,0.08)',wallCol:'#aaccee',floorCol:'#2a3040',mechanic:'timestop',bossName:'齿轮守卫者',bossCol:'#8899aa',duration:600,crystals:200,twoBoss:true,boss2Name:'钟楼之心',boss2Time:300},
-  {name:'暗影镜像界',bgCol:'#0a0a0a',gridCol:'rgba(255,255,255,0.05)',wallCol:'#ffffff',floorCol:'#1a1a1a',mechanic:'mirror',bossName:'镜中恶魔',bossCol:'#aa00aa',duration:600,crystals:500,twoBoss:true,boss2Name:'终极镜魔',boss2Time:300},
+  {name:'深海水晶城',bgCol:'#0a1a2a',gridCol:'rgba(60,180,180,0.08)',wallCol:'#22aaaa',floorCol:'#0a2a3a',mechanic:'current',bossName:'深渊鲸鱼王',bossCol:'#2266aa',duration:180,crystals:200,twoBoss:true,boss2Name:'深渊巨鲸',boss2Time:90},
+  {name:'云端钟楼',bgCol:'#1a2030',gridCol:'rgba(150,180,220,0.08)',wallCol:'#aaccee',floorCol:'#2a3040',mechanic:'timestop',bossName:'齿轮守卫者',bossCol:'#8899aa',duration:180,crystals:200,twoBoss:true,boss2Name:'钟楼之心',boss2Time:90},
+  {name:'暗影镜像界',bgCol:'#0a0a0a',gridCol:'rgba(255,255,255,0.05)',wallCol:'#ffffff',floorCol:'#1a1a1a',mechanic:'mirror',bossName:'镜中恶魔',bossCol:'#aa00aa',duration:180,crystals:500,twoBoss:true,boss2Name:'终极镜魔',boss2Time:90},
 ];
 
 // ── skill definitions ────────────────────────────────────────────────
@@ -938,12 +938,12 @@ function update(dt){
   if(state!=='playing') return;
   gameTime+=dt;
   const m=MAPS[selectedMapIdx];
-  // boss spawn
+  // boss spawn — use map duration
   if(m.twoBoss){
-    if(!bossSpawned&&gameTime>=300){bossSpawned=true;spawnBoss(false);}
-    if(!boss2Spawned&&gameTime>=600){boss2Spawned=true;spawnBoss(true);}
+    if(!bossSpawned&&gameTime>=m.boss2Time){bossSpawned=true;spawnBoss(false);}
+    if(!boss2Spawned&&gameTime>=m.duration){boss2Spawned=true;spawnBoss(true);}
   } else {
-    if(!bossSpawned&&gameTime>=180){bossSpawned=true;spawnBoss(false);}
+    if(!bossSpawned&&gameTime>=m.duration){bossSpawned=true;spawnBoss(false);}
   }
   if(roundBanner){roundBanner.timer-=dt;if(roundBanner.timer<=0)roundBanner=null;}
   camera.x=player.x-W/2;camera.y=player.y-H/2;
@@ -1154,7 +1154,7 @@ function drawHUD(){
   ctx.fillText(`${c.name} Lv.${player.level}`,W/2,row1);
   // timer — top right
   const m=MAPS[selectedMapIdx];
-  const totalSec=m.twoBoss?600:180;
+  const totalSec=m.duration;
   const secsLeft=Math.max(0,Math.ceil(totalSec-gameTime));
   const mins=Math.floor(secsLeft/60),secs=secsLeft%60;
   ctx.fillStyle='#fff';ctx.font=`bold ${mfs(11)}px Courier New`;ctx.textAlign='right';
