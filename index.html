@@ -14,7 +14,7 @@ body {
   -webkit-user-select: none;
   user-select: none;
 }
-canvas { display: block; width: 100vw; height: 100vh; cursor: default; }
+canvas { display: block; cursor: default; }
 </style>
 </head>
 <body>
@@ -22,16 +22,23 @@ canvas { display: block; width: 100vw; height: 100vh; cursor: default; }
 <script>
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
-let W = 900, H = 640;
-function resizeCanvas(){
-  W = canvas.width = window.innerWidth;
-  H = canvas.height = window.innerHeight;
+const W = 720, H = 1280;
+const dpr = window.devicePixelRatio || 1;
+canvas.width = W * dpr; canvas.height = H * dpr;
+ctx.scale(dpr, dpr);
+function fitCanvas(){
+  const scale = Math.min(window.innerWidth/W, window.innerHeight/H);
+  canvas.style.width = W*scale + 'px';
+  canvas.style.height = H*scale + 'px';
+  canvas.style.position = 'fixed';
+  canvas.style.left = (window.innerWidth - W*scale)/2 + 'px';
+  canvas.style.top = (window.innerHeight - H*scale)/2 + 'px';
 }
-resizeCanvas();
-window.addEventListener('resize', resizeCanvas);
-function portrait(){ return H > W; }
-function S(){ return Math.min(W,H)/640; }
-function fs(base){ return Math.max(8, Math.round(base*S())); }
+fitCanvas();
+window.addEventListener('resize', fitCanvas);
+function portrait(){ return true; }
+function S(){ return 1; }
+function fs(base){ return Math.max(24, Math.round(base)); }
 
 // ── helpers ──────────────────────────────────────────────────────────
 const rand   = (a,b) => Math.random()*(b-a)+a;
@@ -76,7 +83,7 @@ function writeSave(s){ localStorage.setItem('souler_save',JSON.stringify(s)); }
 let save=loadSave();
 
 // ── constants ────────────────────────────────────────────────────────
-const MAP_HW=1400, MAP_HH=1100;
+const MAP_HW=720, MAP_HH=1280;
 
 // ── character definitions ────────────────────────────────────────────
 const CHARACTERS={
@@ -221,9 +228,9 @@ canvas.addEventListener('click',e=>{
   if(state==='levelup'){handleLevelUpClick(mx,my);return;}
   if(state==='gameover'||state==='victory'){state='charselect';return;}
 });
-// touch joystick — fixed position left-bottom on portrait, free-position on landscape
-const JR=80; // joystick radius
-function joyBase(){ return {x:JR+W*0.05, y:H-160-JR}; }
+// touch joystick — follow-finger: appears where you press, disappears on release
+const JR=80; // joystick outer radius
+const JR_INNER=30; // joystick inner knob radius
 canvas.addEventListener('touchstart',e=>{
   e.preventDefault();
   const r=canvas.getBoundingClientRect();
@@ -235,11 +242,7 @@ canvas.addEventListener('touchstart',e=>{
   if(state==='levelup'){handleLevelUpClick(tx,ty);return;}
   if(state==='gameover'||state==='victory'){state='charselect';return;}
   if(state==='playing'){
-    const jb=joyBase();
-    joystick.active=true; joystick.sx=jb.x; joystick.sy=jb.y; joystick.cx=tx; joystick.cy=ty; joystick.dx=0; joystick.dy=0;
-    const ddx=tx-jb.x,ddy=ty-jb.y,dl=Math.hypot(ddx,ddy)||1;
-    const cl=Math.min(dl,JR);
-    joystick.dx=ddx/dl*cl/JR; joystick.dy=ddy/dl*cl/JR;
+    joystick.active=true; joystick.sx=tx; joystick.sy=ty; joystick.cx=tx; joystick.cy=ty; joystick.dx=0; joystick.dy=0;
   }
 },{passive:false});
 canvas.addEventListener('touchmove',e=>{
@@ -258,7 +261,7 @@ canvas.addEventListener('touchend',e=>{
   e.preventDefault();
   joystick.active=false; joystick.dx=0; joystick.dy=0;
 },{passive:false});
-window.addEventListener('orientationchange',()=>setTimeout(resizeCanvas,200));
+window.addEventListener('orientationchange',()=>setTimeout(fitCanvas,200));
 
 // ── game state ───────────────────────────────────────────────────────
 let state='title';
@@ -763,7 +766,7 @@ class Player {
   draw(){
     if(this.flickT>0&&Math.floor(this.flickT*10)%2===0) return;
     const sx=this.x-camera.x, sy=this.y-camera.y;
-    const size=this.r*2.2;
+    const size=this.r*2.2*1.5;
     ctx.save();
     // shadow
     ctx.fillStyle='rgba(0,0,0,0.35)';
@@ -867,17 +870,9 @@ function applyUpgrade(c){
 // ── character / map select ───────────────────────────────────────────
 function charSelectLayout(){
   const chars=Object.entries(CHARACTERS);
-  const p=portrait();
-  if(p){
-    const cols=2,cw=(W-W*0.1-16)/cols,ch=cw*1.2,gap=12;
-    const baseX=W*0.05,baseY=H*0.15;
-    return {chars,cols,cw,ch,gap,baseX,baseY};
-  } else {
-    const cw=Math.min(140,W*0.12),ch=cw*1.3,gap=Math.min(16,W*0.015);
-    const total=cw*chars.length+gap*(chars.length-1);
-    const baseX=(W-total)/2,baseY=H*0.22;
-    return {chars,cols:chars.length,cw,ch,gap,baseX,baseY};
-  }
+  const cols=1,cw=640,ch=180,gap=16;
+  const baseX=(W-cw)/2,baseY=140;
+  return {chars,cols,cw,ch,gap,baseX,baseY};
 }
 function handleCharSelectClick(mx,my){
   const {chars,cols,cw,ch,gap,baseX,baseY}=charSelectLayout();
@@ -1095,98 +1090,69 @@ function drawLightning(){
 }
 
 function drawJoystick(){
-  if(state!=='playing'||!('ontouchstart' in window)) return;
-  const jb=joyBase();
-  // black mask under joystick area to hide monsters behind it
+  if(state!=='playing'||!joystick.active) return;
   ctx.save();
-  const maskW=JR*3, maskH=H-(jb.y-JR-20);
-  const maskX=jb.x-maskW/2, maskY=jb.y-JR-20;
-  const maskGrd=ctx.createLinearGradient(maskX,maskY,maskX,maskY+maskH);
-  maskGrd.addColorStop(0,'rgba(0,0,0,0)');
-  maskGrd.addColorStop(0.15,'rgba(0,0,0,0.7)');
-  maskGrd.addColorStop(0.4,'rgba(0,0,0,0.9)');
-  maskGrd.addColorStop(1,'rgba(0,0,0,0.95)');
-  ctx.fillStyle=maskGrd;
-  ctx.fillRect(maskX,maskY,maskW,maskH);
-  ctx.restore();
-  // joystick base
-  ctx.save(); ctx.globalAlpha=0.25;
-  ctx.strokeStyle='#fff'; ctx.lineWidth=3;
-  ctx.beginPath(); ctx.arc(jb.x,jb.y,JR,0,Math.PI*2); ctx.stroke();
-  ctx.fillStyle='#fff';
-  ctx.beginPath(); ctx.arc(jb.x,jb.y,JR*0.25,0,Math.PI*2); ctx.fill();
-  ctx.restore();
-  // active knob
-  if(!joystick.active) return;
-  ctx.save(); ctx.globalAlpha=0.4;
+  // outer ring
+  ctx.globalAlpha=0.3;
   ctx.strokeStyle='#fff'; ctx.lineWidth=3;
   ctx.beginPath(); ctx.arc(joystick.sx,joystick.sy,JR,0,Math.PI*2); ctx.stroke();
+  // inner knob
+  ctx.globalAlpha=0.5;
   ctx.fillStyle='#fff';
   const kx=joystick.sx+joystick.dx*JR, ky=joystick.sy+joystick.dy*JR;
-  ctx.beginPath(); ctx.arc(kx,ky,JR*0.3,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(kx,ky,JR_INNER,0,Math.PI*2); ctx.fill();
   ctx.restore();
 }
 
 function drawHUD(){
-  const s=S(),p=portrait();
-  const mob='ontouchstart' in window;
-  const mf=mob?1.3:1; // mobile font multiplier
-  function mfs(base){ return Math.max(8, Math.round(base*S()*mf)); }
-  const pad=W*0.02,row1=pad+mfs(14);
-  // HP bar
-  const hw=p?W*0.38:W*0.24,hh=mfs(16),hx=pad,hy=pad;
-  ctx.fillStyle='#2a0a0a';ctx.fillRect(hx,hy,hw,hh);
+  const pad=16;
+  // Row 1: HP bar left (200px), name+level center, timer right
+  const hpW=200, hpH=28, hpX=pad, hpY=pad;
+  ctx.fillStyle='#2a0a0a';ctx.fillRect(hpX,hpY,hpW,hpH);
   const hpRatio=clamp(player.hp/player.maxHp,0,1);
-  const hpGrad=ctx.createLinearGradient(hx,hy,hx+hw,hy);
+  const hpGrad=ctx.createLinearGradient(hpX,hpY,hpX+hpW,hpY);
   hpGrad.addColorStop(0,'#ff1a1a');hpGrad.addColorStop(1,'#ff5544');
-  ctx.fillStyle=hpGrad;ctx.fillRect(hx,hy,hw*hpRatio,hh);
-  ctx.strokeStyle='#444';ctx.lineWidth=1;ctx.strokeRect(hx,hy,hw,hh);
-  ctx.fillStyle='#fff';ctx.font=`bold ${mfs(10)}px Courier New`;ctx.textAlign='center';
-  ctx.fillText(`${Math.ceil(player.hp)}/${player.maxHp}`,hx+hw/2,hy+hh*0.75);
-  // XP bar
-  const xh=mfs(8),xy=hy+hh+2;
-  ctx.fillStyle='#0a2a0a';ctx.fillRect(hx,xy,hw,xh);
-  ctx.fillStyle='#00cc66';ctx.fillRect(hx,xy,hw*clamp(player.xp/player.xpNext,0,1),xh);
-  ctx.strokeStyle='#444';ctx.strokeRect(hx,xy,hw,xh);
-  // name + level — top center
+  ctx.fillStyle=hpGrad;ctx.fillRect(hpX,hpY,hpW*hpRatio,hpH);
+  ctx.strokeStyle='#444';ctx.lineWidth=1;ctx.strokeRect(hpX,hpY,hpW,hpH);
+  ctx.fillStyle='#fff';ctx.font='bold 24px Courier New';ctx.textAlign='center';
+  ctx.fillText(`${Math.ceil(player.hp)}/${player.maxHp}`,hpX+hpW/2,hpY+hpH-6);
+  // name + level center
   const c=CHARACTERS[selectedCharKey];
-  ctx.fillStyle='#ffdd44';ctx.font=`bold ${mfs(13)}px Courier New`;ctx.textAlign='center';
-  ctx.fillText(`${c.name} Lv.${player.level}`,W/2,row1);
-  // timer — top right
+  ctx.fillStyle='#ffdd44';ctx.font='bold 26px Courier New';ctx.textAlign='center';
+  ctx.fillText(`${c.name} Lv.${player.level}`,W/2,pad+24);
+  // timer right
   const m=MAPS[selectedMapIdx];
   const totalSec=m.duration;
   const secsLeft=Math.max(0,Math.ceil(totalSec-gameTime));
   const mins=Math.floor(secsLeft/60),secs=secsLeft%60;
-  ctx.fillStyle='#fff';ctx.font=`bold ${mfs(11)}px Courier New`;ctx.textAlign='right';
-  ctx.fillText(`${mins}:${secs.toString().padStart(2,'0')}`,W-pad,row1);
-  // time progress bar
-  const rw=W*0.2,rh=mfs(6),rx=W-pad-rw,ry=row1+4;
-  ctx.fillStyle='#1a1a3a';ctx.fillRect(rx,ry,rw,rh);
+  ctx.fillStyle='#fff';ctx.font='bold 26px Courier New';ctx.textAlign='right';
+  ctx.fillText(`${mins}:${secs.toString().padStart(2,'0')}`,W-pad,pad+24);
+  // Row 2: XP bar full width
+  const xpY=hpY+hpH+6, xpH=14;
+  ctx.fillStyle='#0a2a0a';ctx.fillRect(pad,xpY,W-pad*2,xpH);
+  ctx.fillStyle='#00cc66';ctx.fillRect(pad,xpY,Math.max(0,(W-pad*2)*clamp(player.xp/player.xpNext,0,1)),xpH);
+  ctx.strokeStyle='#444';ctx.strokeRect(pad,xpY,W-pad*2,xpH);
+  // time progress bar under XP
+  const tpY=xpY+xpH+4, tpH=10;
+  ctx.fillStyle='#1a1a3a';ctx.fillRect(pad,tpY,W-pad*2,tpH);
   const timeRatio=clamp(gameTime/totalSec,0,1);
   ctx.fillStyle=timeRatio<0.6?'#44cc44':timeRatio<0.8?'#ccaa00':'#cc2222';
-  ctx.fillRect(rx,ry,rw*timeRatio,rh);ctx.strokeStyle='#555';ctx.lineWidth=1;ctx.strokeRect(rx,ry,rw,rh);
-  // row 2: crystals, score, enemies — separated with spacing
-  const row2=row1+mfs(18);
-  const infoFs=mfs(13);
-  ctx.font=`bold ${infoFs}px Courier New`;ctx.textAlign='right';
-  const lineH=mfs(18);
-  ctx.fillStyle='#88ddff';
-  ctx.fillText(`晶石: ${save.crystals}`,W-pad,row2);
-  ctx.fillStyle='#ffcc44';
-  ctx.fillText(`得分: ${score}`,W-pad,row2+lineH);
-  ctx.fillStyle='#ff7766';
-  ctx.fillText(`敌人: ${enemies.length}`,W-pad,row2+lineH*2);
-  // active skills — top-right column
+  ctx.fillRect(pad,tpY,(W-pad*2)*timeRatio,tpH);ctx.strokeStyle='#555';ctx.lineWidth=1;ctx.strokeRect(pad,tpY,W-pad*2,tpH);
+  // Right side: crystals, score, enemies — vertical, 28px font
+  const infoX=W-pad, infoY=tpY+tpH+30;
+  ctx.font='bold 28px Courier New';ctx.textAlign='right';
+  ctx.fillStyle='#88ddff';ctx.fillText(`晶石: ${save.crystals}`,infoX,infoY);
+  ctx.fillStyle='#ffcc44';ctx.fillText(`得分: ${score}`,infoX,infoY+36);
+  ctx.fillStyle='#ff7766';ctx.fillText(`敌人: ${enemies.length}`,infoX,infoY+72);
+  // active skills
   ctx.textAlign='right';
   const activeSkills=player.weapons.filter(w=>SKILLS[w.id]&&SKILLS[w.id].type==='active');
-  const skFs=mfs(10),skH=skFs+4;
-  const skillStartY=row2+lineH*2+10;
-  activeSkills.forEach((w,i)=>{const sy=skillStartY+i*skH;const def=SKILLS[w.id];
-    ctx.fillStyle=def.color||'#ccc';ctx.font=`${skFs}px Courier New`;
-    ctx.fillText(`${def.icon}${def.name} x${w.stack}`,W-pad,sy+skFs);});
+  activeSkills.forEach((w,i)=>{const sy=infoY+108+i*32;const def=SKILLS[w.id];
+    ctx.fillStyle=def.color||'#ccc';ctx.font='24px Courier New';
+    ctx.fillText(`${def.icon}${def.name} x${w.stack}`,infoX,sy);});
   // hint
-  if(gameTime<10){const a=clamp((10-gameTime)/3,0,1);ctx.globalAlpha=a;ctx.fillStyle='#aaa';ctx.font=`${mfs(11)}px Courier New`;ctx.textAlign='center';
-    ctx.fillText('移动:WASD/摇杆  技能自动释放',W/2,H*0.97);ctx.globalAlpha=1;}
+  if(gameTime<10){const a=clamp((10-gameTime)/3,0,1);ctx.globalAlpha=a;ctx.fillStyle='#aaa';ctx.font='24px Courier New';ctx.textAlign='center';
+    ctx.fillText('移动:WASD/摇杆  技能自动释放',W/2,H-40);ctx.globalAlpha=1;}
 }
 
 function drawBossBar(){
