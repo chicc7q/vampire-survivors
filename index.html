@@ -55,8 +55,15 @@ const charImgFiles={
   yixiaoze:'yixiaoze.PNG', guanyiyi:'guanyiyi.PNG', nianrenbao:'nianrenbao.PNG'
 };
 for(const [k,src] of Object.entries(charImgFiles)){
-  const img=new Image(); img.crossOrigin='anonymous';
+  const img=new Image();
+  img.crossOrigin='anonymous';
   img.onload=(function(key,im){return ()=>{charImages[key]=im;};})(k,img);
+  img.onerror=(function(key,s){return ()=>{
+    // retry once without crossOrigin (some mobile browsers block it)
+    const retry=new Image();
+    retry.onload=()=>{charImages[key]=retry;};
+    retry.src=s;
+  };})(k,src);
   img.src=src;
 }
 
@@ -216,7 +223,7 @@ canvas.addEventListener('click',e=>{
 });
 // touch joystick — fixed position left-bottom on portrait, free-position on landscape
 const JR=80; // joystick radius
-function joyBase(){ return {x:JR+W*0.05, y:H-JR-H*0.05}; }
+function joyBase(){ return {x:JR+W*0.05, y:H-160-JR}; }
 canvas.addEventListener('touchstart',e=>{
   e.preventDefault();
   const r=canvas.getBoundingClientRect();
@@ -1088,16 +1095,28 @@ function drawLightning(){
 }
 
 function drawJoystick(){
-  // always show joystick base on touch devices in playing state
+  if(state!=='playing'||!('ontouchstart' in window)) return;
   const jb=joyBase();
-  if(state==='playing'&&'ontouchstart' in window){
-    ctx.save(); ctx.globalAlpha=0.2;
-    ctx.strokeStyle='#fff'; ctx.lineWidth=3;
-    ctx.beginPath(); ctx.arc(jb.x,jb.y,JR,0,Math.PI*2); ctx.stroke();
-    ctx.fillStyle='#fff';
-    ctx.beginPath(); ctx.arc(jb.x,jb.y,JR*0.25,0,Math.PI*2); ctx.fill();
-    ctx.restore();
-  }
+  // black mask under joystick area to hide monsters behind it
+  ctx.save();
+  const maskW=JR*3, maskH=H-(jb.y-JR-20);
+  const maskX=jb.x-maskW/2, maskY=jb.y-JR-20;
+  const maskGrd=ctx.createLinearGradient(maskX,maskY,maskX,maskY+maskH);
+  maskGrd.addColorStop(0,'rgba(0,0,0,0)');
+  maskGrd.addColorStop(0.15,'rgba(0,0,0,0.7)');
+  maskGrd.addColorStop(0.4,'rgba(0,0,0,0.9)');
+  maskGrd.addColorStop(1,'rgba(0,0,0,0.95)');
+  ctx.fillStyle=maskGrd;
+  ctx.fillRect(maskX,maskY,maskW,maskH);
+  ctx.restore();
+  // joystick base
+  ctx.save(); ctx.globalAlpha=0.25;
+  ctx.strokeStyle='#fff'; ctx.lineWidth=3;
+  ctx.beginPath(); ctx.arc(jb.x,jb.y,JR,0,Math.PI*2); ctx.stroke();
+  ctx.fillStyle='#fff';
+  ctx.beginPath(); ctx.arc(jb.x,jb.y,JR*0.25,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+  // active knob
   if(!joystick.active) return;
   ctx.save(); ctx.globalAlpha=0.4;
   ctx.strokeStyle='#fff'; ctx.lineWidth=3;
@@ -1110,52 +1129,63 @@ function drawJoystick(){
 
 function drawHUD(){
   const s=S(),p=portrait();
-  const pad=W*0.02,row1=pad+fs(14);
+  const mob='ontouchstart' in window;
+  const mf=mob?1.3:1; // mobile font multiplier
+  function mfs(base){ return Math.max(8, Math.round(base*S()*mf)); }
+  const pad=W*0.02,row1=pad+mfs(14);
   // HP bar
-  const hw=p?W*0.38:W*0.24,hh=fs(16),hx=pad,hy=pad;
+  const hw=p?W*0.38:W*0.24,hh=mfs(16),hx=pad,hy=pad;
   ctx.fillStyle='#2a0a0a';ctx.fillRect(hx,hy,hw,hh);
   const hpRatio=clamp(player.hp/player.maxHp,0,1);
   const hpGrad=ctx.createLinearGradient(hx,hy,hx+hw,hy);
   hpGrad.addColorStop(0,'#ff1a1a');hpGrad.addColorStop(1,'#ff5544');
   ctx.fillStyle=hpGrad;ctx.fillRect(hx,hy,hw*hpRatio,hh);
   ctx.strokeStyle='#444';ctx.lineWidth=1;ctx.strokeRect(hx,hy,hw,hh);
-  ctx.fillStyle='#fff';ctx.font=`bold ${fs(10)}px Courier New`;ctx.textAlign='center';
+  ctx.fillStyle='#fff';ctx.font=`bold ${mfs(10)}px Courier New`;ctx.textAlign='center';
   ctx.fillText(`${Math.ceil(player.hp)}/${player.maxHp}`,hx+hw/2,hy+hh*0.75);
   // XP bar
-  const xh=fs(8),xy=hy+hh+2;
+  const xh=mfs(8),xy=hy+hh+2;
   ctx.fillStyle='#0a2a0a';ctx.fillRect(hx,xy,hw,xh);
   ctx.fillStyle='#00cc66';ctx.fillRect(hx,xy,hw*clamp(player.xp/player.xpNext,0,1),xh);
   ctx.strokeStyle='#444';ctx.strokeRect(hx,xy,hw,xh);
   // name + level — top center
   const c=CHARACTERS[selectedCharKey];
-  ctx.fillStyle='#ffdd44';ctx.font=`bold ${fs(13)}px Courier New`;ctx.textAlign='center';
+  ctx.fillStyle='#ffdd44';ctx.font=`bold ${mfs(13)}px Courier New`;ctx.textAlign='center';
   ctx.fillText(`${c.name} Lv.${player.level}`,W/2,row1);
   // timer — top right
   const m=MAPS[selectedMapIdx];
   const totalSec=m.twoBoss?600:180;
   const secsLeft=Math.max(0,Math.ceil(totalSec-gameTime));
   const mins=Math.floor(secsLeft/60),secs=secsLeft%60;
-  ctx.fillStyle='#fff';ctx.font=`bold ${fs(11)}px Courier New`;ctx.textAlign='right';
+  ctx.fillStyle='#fff';ctx.font=`bold ${mfs(11)}px Courier New`;ctx.textAlign='right';
   ctx.fillText(`${mins}:${secs.toString().padStart(2,'0')}`,W-pad,row1);
   // time progress bar
-  const rw=W*0.2,rh=fs(6),rx=W-pad-rw,ry=row1+4;
+  const rw=W*0.2,rh=mfs(6),rx=W-pad-rw,ry=row1+4;
   ctx.fillStyle='#1a1a3a';ctx.fillRect(rx,ry,rw,rh);
   const timeRatio=clamp(gameTime/totalSec,0,1);
   ctx.fillStyle=timeRatio<0.6?'#44cc44':timeRatio<0.8?'#ccaa00':'#cc2222';
   ctx.fillRect(rx,ry,rw*timeRatio,rh);ctx.strokeStyle='#555';ctx.lineWidth=1;ctx.strokeRect(rx,ry,rw,rh);
-  // row 2: crystals + score
-  const row2=row1+fs(16);
-  ctx.fillStyle='#88ddff';ctx.font=`${fs(11)}px Courier New`;ctx.textAlign='right';
-  ctx.fillText(`晶石:${save.crystals}  ${score}分  敌:${enemies.length}`,W-pad,row2);
+  // row 2: crystals, score, enemies — separated with spacing
+  const row2=row1+mfs(18);
+  const infoFs=mfs(13);
+  ctx.font=`bold ${infoFs}px Courier New`;ctx.textAlign='right';
+  const lineH=mfs(18);
+  ctx.fillStyle='#88ddff';
+  ctx.fillText(`晶石: ${save.crystals}`,W-pad,row2);
+  ctx.fillStyle='#ffcc44';
+  ctx.fillText(`得分: ${score}`,W-pad,row2+lineH);
+  ctx.fillStyle='#ff7766';
+  ctx.fillText(`敌人: ${enemies.length}`,W-pad,row2+lineH*2);
   // active skills — top-right column
   ctx.textAlign='right';
   const activeSkills=player.weapons.filter(w=>SKILLS[w.id]&&SKILLS[w.id].type==='active');
-  const skFs=fs(10),skH=skFs+4;
-  activeSkills.forEach((w,i)=>{const sy=row2+8+i*skH;const def=SKILLS[w.id];
+  const skFs=mfs(10),skH=skFs+4;
+  const skillStartY=row2+lineH*2+10;
+  activeSkills.forEach((w,i)=>{const sy=skillStartY+i*skH;const def=SKILLS[w.id];
     ctx.fillStyle=def.color||'#ccc';ctx.font=`${skFs}px Courier New`;
     ctx.fillText(`${def.icon}${def.name} x${w.stack}`,W-pad,sy+skFs);});
   // hint
-  if(gameTime<10){const a=clamp((10-gameTime)/3,0,1);ctx.globalAlpha=a;ctx.fillStyle='#aaa';ctx.font=`${fs(11)}px Courier New`;ctx.textAlign='center';
+  if(gameTime<10){const a=clamp((10-gameTime)/3,0,1);ctx.globalAlpha=a;ctx.fillStyle='#aaa';ctx.font=`${mfs(11)}px Courier New`;ctx.textAlign='center';
     ctx.fillText('移动:WASD/摇杆  技能自动释放',W/2,H*0.97);ctx.globalAlpha=1;}
 }
 
