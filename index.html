@@ -5,18 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>Souler 魔法特遣队</title>
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
 body {
   background: #000;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  height: 100vh;
-  overflow: hidden;
   font-family: 'Courier New', monospace;
   touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
-canvas { display: block; cursor: default; }
+canvas { display: block; width: 100vw; height: 100vh; cursor: default; }
 </style>
 </head>
 <body>
@@ -24,8 +22,16 @@ canvas { display: block; cursor: default; }
 <script>
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
-const W = canvas.width  = 900;
-const H = canvas.height = 640;
+let W = 900, H = 640;
+function resizeCanvas(){
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+function portrait(){ return H > W; }
+function S(){ return Math.min(W,H)/640; }
+function fs(base){ return Math.max(8, Math.round(base*S())); }
 
 // ── helpers ──────────────────────────────────────────────────────────
 const rand   = (a,b) => Math.random()*(b-a)+a;
@@ -208,7 +214,9 @@ canvas.addEventListener('click',e=>{
   if(state==='levelup'){handleLevelUpClick(mx,my);return;}
   if(state==='gameover'||state==='victory'){state='charselect';return;}
 });
-// FIX #2: touch joystick
+// touch joystick — fixed position left-bottom on portrait, free-position on landscape
+const JR=80; // joystick radius
+function joyBase(){ return {x:JR+W*0.05, y:H-JR-H*0.05}; }
 canvas.addEventListener('touchstart',e=>{
   e.preventDefault();
   const r=canvas.getBoundingClientRect();
@@ -220,7 +228,11 @@ canvas.addEventListener('touchstart',e=>{
   if(state==='levelup'){handleLevelUpClick(tx,ty);return;}
   if(state==='gameover'||state==='victory'){state='charselect';return;}
   if(state==='playing'){
-    joystick.active=true; joystick.sx=tx; joystick.sy=ty; joystick.cx=tx; joystick.cy=ty; joystick.dx=0; joystick.dy=0;
+    const jb=joyBase();
+    joystick.active=true; joystick.sx=jb.x; joystick.sy=jb.y; joystick.cx=tx; joystick.cy=ty; joystick.dx=0; joystick.dy=0;
+    const ddx=tx-jb.x,ddy=ty-jb.y,dl=Math.hypot(ddx,ddy)||1;
+    const cl=Math.min(dl,JR);
+    joystick.dx=ddx/dl*cl/JR; joystick.dy=ddy/dl*cl/JR;
   }
 },{passive:false});
 canvas.addEventListener('touchmove',e=>{
@@ -232,14 +244,14 @@ canvas.addEventListener('touchmove',e=>{
   joystick.cy=(t.clientY-r.top)*H/r.height;
   const ddx=joystick.cx-joystick.sx, ddy=joystick.cy-joystick.sy;
   const dl=Math.hypot(ddx,ddy)||1;
-  const maxR=60;
-  const cl=Math.min(dl,maxR);
-  joystick.dx=ddx/dl*cl/maxR; joystick.dy=ddy/dl*cl/maxR;
+  const cl=Math.min(dl,JR);
+  joystick.dx=ddx/dl*cl/JR; joystick.dy=ddy/dl*cl/JR;
 },{passive:false});
 canvas.addEventListener('touchend',e=>{
   e.preventDefault();
   joystick.active=false; joystick.dx=0; joystick.dy=0;
 },{passive:false});
+window.addEventListener('orientationchange',()=>setTimeout(resizeCanvas,200));
 
 // ── game state ───────────────────────────────────────────────────────
 let state='title';
@@ -558,7 +570,7 @@ class Boss {
     ctx.fillStyle='#ff0000';ctx.beginPath();
     ctx.arc(sx+ed.x*19-ed.y*11,sy+bob+ed.y*19+ed.x*11,4.5,0,Math.PI*2);
     ctx.arc(sx+ed.x*19+ed.y*11,sy+bob+ed.y*19-ed.x*11,4.5,0,Math.PI*2);ctx.fill();
-    ctx.fillStyle='#ff6688';ctx.font='bold 13px Courier New';ctx.textAlign='center';
+    ctx.fillStyle='#ff6688';ctx.font=`bold ${fs(12)}px Courier New`;ctx.textAlign='center';
     ctx.shadowBlur=6;ctx.shadowColor='#000';
     ctx.fillText(`★ ${this.name} ★`,sx,sy+bob-this.r-8);ctx.shadowBlur=0;
     ctx.restore();
@@ -822,11 +834,22 @@ function buildUpgradeChoices(){
   shuffle(pool); upgradeChoices=pool.slice(0,3);
 }
 function handleLevelUpClick(mx,my){
-  const cw=210,ch=220,gap=30,total=cw*3+gap*2;
-  const sx=(W-total)/2,sy=(H-ch)/2-20;
-  for(let i=0;i<upgradeChoices.length;i++){
-    const cx=sx+i*(cw+gap);
-    if(mx>=cx&&mx<=cx+cw&&my>=sy&&my<=sy+ch){applyUpgrade(upgradeChoices[i]);state='playing';break;}
+  const p=portrait();
+  if(p){
+    const cw=W*0.85,ch=H*0.18,gap=H*0.03;
+    const total=ch*3+gap*2;
+    const sx=(W-cw)/2,baseY=(H-total)/2;
+    for(let i=0;i<upgradeChoices.length;i++){
+      const cy=baseY+i*(ch+gap);
+      if(mx>=sx&&mx<=sx+cw&&my>=cy&&my<=cy+ch){applyUpgrade(upgradeChoices[i]);state='playing';break;}
+    }
+  } else {
+    const cw=W*0.18,ch=H*0.42,gap=W*0.025,total=cw*3+gap*2;
+    const sx=(W-total)/2,sy=(H-ch)/2;
+    for(let i=0;i<upgradeChoices.length;i++){
+      const cx=sx+i*(cw+gap);
+      if(mx>=cx&&mx<=cx+cw&&my>=sy&&my<=sy+ch){applyUpgrade(upgradeChoices[i]);state='playing';break;}
+    }
   }
 }
 function applyUpgrade(c){
@@ -835,25 +858,51 @@ function applyUpgrade(c){
 }
 
 // ── character / map select ───────────────────────────────────────────
-function handleCharSelectClick(mx,my){
+function charSelectLayout(){
   const chars=Object.entries(CHARACTERS);
-  const cw=140,ch=180,gap=16,total=cw*chars.length+gap*(chars.length-1);
-  const sx=(W-total)/2,sy=220;
+  const p=portrait();
+  if(p){
+    const cols=2,cw=(W-W*0.1-16)/cols,ch=cw*1.2,gap=12;
+    const baseX=W*0.05,baseY=H*0.15;
+    return {chars,cols,cw,ch,gap,baseX,baseY};
+  } else {
+    const cw=Math.min(140,W*0.12),ch=cw*1.3,gap=Math.min(16,W*0.015);
+    const total=cw*chars.length+gap*(chars.length-1);
+    const baseX=(W-total)/2,baseY=H*0.22;
+    return {chars,cols:chars.length,cw,ch,gap,baseX,baseY};
+  }
+}
+function handleCharSelectClick(mx,my){
+  const {chars,cols,cw,ch,gap,baseX,baseY}=charSelectLayout();
   for(let i=0;i<chars.length;i++){
-    const cx=sx+i*(cw+gap);const [key]=chars[i];
-    if(save.unlockedChars.includes(key)&&mx>=cx&&mx<=cx+cw&&my>=sy&&my<=sy+ch){selectedCharKey=key;state='mapselect';return;}
+    const row=Math.floor(i/cols),col=i%cols;
+    const cx=baseX+col*(cw+gap),cy=baseY+row*(ch+gap);
+    const [key]=chars[i];
+    if(save.unlockedChars.includes(key)&&mx>=cx&&mx<=cx+cw&&my>=cy&&my<=cy+ch){selectedCharKey=key;state='mapselect';return;}
+  }
+}
+function mapSelectLayout(){
+  const p=portrait();
+  if(p){
+    const cols=2,cw=(W-W*0.1-16)/cols,ch=cw*0.6,gap=12;
+    const baseX=W*0.05,baseY=H*0.14;
+    return {cols,cw,ch,gap,baseX,baseY};
+  } else {
+    const cols=4,cw=Math.min(180,W*0.18),ch=cw*0.55,gap=Math.min(16,W*0.015);
+    const totalW=cw*cols+gap*(cols-1),baseX=(W-totalW)/2,baseY=H*0.18;
+    return {cols,cw,ch,gap,baseX,baseY};
   }
 }
 function handleMapSelectClick(mx,my){
-  const cols=4,cw=180,ch=100,gap=16;
-  const totalW=cw*cols+gap*(cols-1),baseX=(W-totalW)/2,baseY=180;
+  const {cols,cw,ch,gap,baseX,baseY}=mapSelectLayout();
   for(let i=0;i<MAPS.length;i++){
     const row=Math.floor(i/cols),col=i%cols;
     const cx=baseX+col*(cw+gap),cy=baseY+row*(ch+gap);
     const unlocked=i===0||save.clearedMaps.includes(i-1);
     if(unlocked&&mx>=cx&&mx<=cx+cw&&my>=cy&&my<=cy+ch){selectedMapIdx=i;startGame();return;}
   }
-  if(mx>=20&&mx<=120&&my>=H-50&&my<=H-20) state='charselect';
+  const bw=W*0.2,bh=H*0.05;
+  if(mx>=W*0.02&&mx<=W*0.02+bw&&my>=H-bh-H*0.02&&my<=H-H*0.02) state='charselect';
 }
 
 // ── draw helpers ─────────────────────────────────────────────────────
@@ -1038,63 +1087,81 @@ function drawLightning(){
   }
 }
 
-// FIX #2: draw joystick on screen
 function drawJoystick(){
+  // always show joystick base on touch devices in playing state
+  const jb=joyBase();
+  if(state==='playing'&&'ontouchstart' in window){
+    ctx.save(); ctx.globalAlpha=0.2;
+    ctx.strokeStyle='#fff'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(jb.x,jb.y,JR,0,Math.PI*2); ctx.stroke();
+    ctx.fillStyle='#fff';
+    ctx.beginPath(); ctx.arc(jb.x,jb.y,JR*0.25,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
   if(!joystick.active) return;
-  ctx.save(); ctx.globalAlpha=0.35;
+  ctx.save(); ctx.globalAlpha=0.4;
   ctx.strokeStyle='#fff'; ctx.lineWidth=3;
-  ctx.beginPath(); ctx.arc(joystick.sx,joystick.sy,60,0,Math.PI*2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(joystick.sx,joystick.sy,JR,0,Math.PI*2); ctx.stroke();
   ctx.fillStyle='#fff';
-  const kx=joystick.sx+joystick.dx*60, ky=joystick.sy+joystick.dy*60;
-  ctx.beginPath(); ctx.arc(kx,ky,22,0,Math.PI*2); ctx.fill();
+  const kx=joystick.sx+joystick.dx*JR, ky=joystick.sy+joystick.dy*JR;
+  ctx.beginPath(); ctx.arc(kx,ky,JR*0.3,0,Math.PI*2); ctx.fill();
   ctx.restore();
 }
 
 function drawHUD(){
-  const hw=220,hh=18,hx=10,hy=10;
+  const s=S(),p=portrait();
+  const pad=W*0.02,row1=pad+fs(14);
+  // HP bar
+  const hw=p?W*0.38:W*0.24,hh=fs(16),hx=pad,hy=pad;
   ctx.fillStyle='#2a0a0a';ctx.fillRect(hx,hy,hw,hh);
   const hpRatio=clamp(player.hp/player.maxHp,0,1);
   const hpGrad=ctx.createLinearGradient(hx,hy,hx+hw,hy);
   hpGrad.addColorStop(0,'#ff1a1a');hpGrad.addColorStop(1,'#ff5544');
   ctx.fillStyle=hpGrad;ctx.fillRect(hx,hy,hw*hpRatio,hh);
   ctx.strokeStyle='#444';ctx.lineWidth=1;ctx.strokeRect(hx,hy,hw,hh);
-  ctx.fillStyle='#fff';ctx.font='bold 11px Courier New';ctx.textAlign='center';
-  ctx.fillText(`${Math.ceil(player.hp)} / ${player.maxHp} HP`,hx+hw/2,hy+13);
-  const xw=220,xh=10,xx=10,xy=32;
-  ctx.fillStyle='#0a2a0a';ctx.fillRect(xx,xy,xw,xh);
-  ctx.fillStyle='#00cc66';ctx.fillRect(xx,xy,xw*clamp(player.xp/player.xpNext,0,1),xh);
-  ctx.strokeStyle='#444';ctx.strokeRect(xx,xy,xw,xh);
-  ctx.fillStyle='#ffdd44';ctx.font='bold 14px Courier New';ctx.textAlign='left';
+  ctx.fillStyle='#fff';ctx.font=`bold ${fs(10)}px Courier New`;ctx.textAlign='center';
+  ctx.fillText(`${Math.ceil(player.hp)}/${player.maxHp}`,hx+hw/2,hy+hh*0.75);
+  // XP bar
+  const xh=fs(8),xy=hy+hh+2;
+  ctx.fillStyle='#0a2a0a';ctx.fillRect(hx,xy,hw,xh);
+  ctx.fillStyle='#00cc66';ctx.fillRect(hx,xy,hw*clamp(player.xp/player.xpNext,0,1),xh);
+  ctx.strokeStyle='#444';ctx.strokeRect(hx,xy,hw,xh);
+  // name + level — top center
   const c=CHARACTERS[selectedCharKey];
-  ctx.fillText(`${c.name} Lv.${player.level}`,hx+xw+8,hy+14);
+  ctx.fillStyle='#ffdd44';ctx.font=`bold ${fs(13)}px Courier New`;ctx.textAlign='center';
+  ctx.fillText(`${c.name} Lv.${player.level}`,W/2,row1);
+  // timer — top right
   const m=MAPS[selectedMapIdx];
   const totalSec=m.twoBoss?600:180;
   const secsLeft=Math.max(0,Math.ceil(totalSec-gameTime));
   const mins=Math.floor(secsLeft/60),secs=secsLeft%60;
-  ctx.fillStyle='#fff';ctx.font='bold 12px Courier New';ctx.textAlign='center';
-  ctx.fillText(`${m.name}  ${mins}:${secs.toString().padStart(2,'0')}`,W/2,20);
-  const rw=180,rh=8,rx=(W-rw)/2,ry=26;
+  ctx.fillStyle='#fff';ctx.font=`bold ${fs(11)}px Courier New`;ctx.textAlign='right';
+  ctx.fillText(`${mins}:${secs.toString().padStart(2,'0')}`,W-pad,row1);
+  // time progress bar
+  const rw=W*0.2,rh=fs(6),rx=W-pad-rw,ry=row1+4;
   ctx.fillStyle='#1a1a3a';ctx.fillRect(rx,ry,rw,rh);
   const timeRatio=clamp(gameTime/totalSec,0,1);
   ctx.fillStyle=timeRatio<0.6?'#44cc44':timeRatio<0.8?'#ccaa00':'#cc2222';
   ctx.fillRect(rx,ry,rw*timeRatio,rh);ctx.strokeStyle='#555';ctx.lineWidth=1;ctx.strokeRect(rx,ry,rw,rh);
-  ctx.fillStyle='#88ddff';ctx.font='14px Courier New';ctx.textAlign='right';
-  ctx.fillText(`晶石: ${save.crystals}`,W-10,20);
-  ctx.fillStyle='#ffaa00';ctx.font='12px Courier New';
-  ctx.fillText(`${score} 分  敌人:${enemies.length}`,W-10,38);
-  ctx.textAlign='left';
+  // row 2: crystals + score
+  const row2=row1+fs(16);
+  ctx.fillStyle='#88ddff';ctx.font=`${fs(11)}px Courier New`;ctx.textAlign='right';
+  ctx.fillText(`晶石:${save.crystals}  ${score}分  敌:${enemies.length}`,W-pad,row2);
+  // active skills — top-right column
+  ctx.textAlign='right';
   const activeSkills=player.weapons.filter(w=>SKILLS[w.id]&&SKILLS[w.id].type==='active');
-  activeSkills.forEach((w,i)=>{const wy=H-12-i*20;const def=SKILLS[w.id];
-    ctx.fillStyle='rgba(0,0,0,0.5)';ctx.fillRect(6,wy-14,180,18);
-    ctx.fillStyle=def.color||'#ccc';ctx.font='13px Courier New';
-    ctx.fillText(`${def.icon} ${def.name} x${w.stack}`,10,wy);});
-  if(gameTime<10){const a=clamp((10-gameTime)/3,0,1);ctx.globalAlpha=a;ctx.fillStyle='#aaa';ctx.font='12px Courier New';ctx.textAlign='center';
-    ctx.fillText('WASD/方向键移动  技能自动释放  收集经验石升级',W/2,H-8);ctx.globalAlpha=1;}
+  const skFs=fs(10),skH=skFs+4;
+  activeSkills.forEach((w,i)=>{const sy=row2+8+i*skH;const def=SKILLS[w.id];
+    ctx.fillStyle=def.color||'#ccc';ctx.font=`${skFs}px Courier New`;
+    ctx.fillText(`${def.icon}${def.name} x${w.stack}`,W-pad,sy+skFs);});
+  // hint
+  if(gameTime<10){const a=clamp((10-gameTime)/3,0,1);ctx.globalAlpha=a;ctx.fillStyle='#aaa';ctx.font=`${fs(11)}px Courier New`;ctx.textAlign='center';
+    ctx.fillText('移动:WASD/摇杆  技能自动释放',W/2,H*0.97);ctx.globalAlpha=1;}
 }
 
 function drawBossBar(){
   const boss=enemies.find(e=>e.isBoss); if(!boss) return;
-  const bw=500,bh=26,bx=(W-bw)/2,by=H-50;
+  const bw=Math.min(W*0.85,500*S()),bh=fs(22),bx=(W-bw)/2,by=H-bh-H*0.06;
   ctx.save();ctx.shadowBlur=16;ctx.shadowColor='#ff0044';
   ctx.fillStyle='#110008';ctx.fillRect(bx-3,by-3,bw+6,bh+6);ctx.shadowBlur=0;
   ctx.fillStyle='#220011';ctx.fillRect(bx,by,bw,bh);
@@ -1103,108 +1170,148 @@ function drawBossBar(){
   g.addColorStop(0,'#880022');g.addColorStop(0.5,'#ff2244');g.addColorStop(1,'#ff6644');
   ctx.fillStyle=g;ctx.fillRect(bx,by,bw*ratio,bh);
   ctx.strokeStyle='#ff0044';ctx.lineWidth=2;ctx.strokeRect(bx,by,bw,bh);
-  ctx.fillStyle='#fff';ctx.font='bold 13px Courier New';ctx.textAlign='center';
-  ctx.fillText(`★ ${boss.name} ★  ${Math.ceil(boss.hp)} / ${boss.maxHp}`,W/2,by+18);ctx.restore();
+  ctx.fillStyle='#fff';ctx.font=`bold ${fs(11)}px Courier New`;ctx.textAlign='center';
+  ctx.fillText(`★ ${boss.name} ★  ${Math.ceil(boss.hp)}/${boss.maxHp}`,W/2,by+bh*0.75);ctx.restore();
 }
 function drawRoundBanner(){
   if(!roundBanner||roundBanner.timer<=0)return;
   const alpha=clamp(roundBanner.timer/0.6,0,1);ctx.save();ctx.globalAlpha=alpha;
-  ctx.fillStyle='rgba(0,0,0,0.55)';ctx.fillRect(0,H/2-40,W,80);
-  ctx.fillStyle='#ffdd44';ctx.font='bold 32px Courier New';ctx.textAlign='center';
-  ctx.shadowBlur=20;ctx.shadowColor='#ffaa00';ctx.fillText(roundBanner.text,W/2,H/2+10);
+  const bh=H*0.1;
+  ctx.fillStyle='rgba(0,0,0,0.55)';ctx.fillRect(0,H/2-bh/2,W,bh);
+  ctx.fillStyle='#ffdd44';ctx.font=`bold ${fs(26)}px Courier New`;ctx.textAlign='center';
+  ctx.shadowBlur=20;ctx.shadowColor='#ffaa00';ctx.fillText(roundBanner.text,W/2,H/2+fs(8));
   ctx.shadowBlur=0;ctx.restore();
 }
 function drawLevelUpScreen(){
   ctx.fillStyle='rgba(0,0,0,0.75)';ctx.fillRect(0,0,W,H);
-  ctx.fillStyle='#ffdd44';ctx.font='bold 24px Courier New';ctx.textAlign='center';
-  ctx.shadowBlur=20;ctx.shadowColor='#ffaa00';ctx.fillText('✦ 升级! 选择一项强化 ✦',W/2,H/2-148);ctx.shadowBlur=0;
-  const cw=210,ch=220,gap=30,total=cw*3+gap*2;
-  const sx=(W-total)/2,sy=(H-ch)/2-20;
-  upgradeChoices.forEach((c,i)=>{const cx=sx+i*(cw+gap);
-    const hover=mouse.x>=cx&&mouse.x<=cx+cw&&mouse.y>=sy&&mouse.y<=sy+ch;
-    ctx.fillStyle=hover?'#252550':'#14143a';ctx.strokeStyle=hover?c.col||'#6688cc':'#3344aa';
-    ctx.lineWidth=hover?2.5:1.5;roundRect(cx,sy,cw,ch,10);ctx.fill();ctx.stroke();
-    ctx.fillStyle=c.col||'#6688cc';ctx.globalAlpha=0.25;
-    ctx.beginPath();ctx.arc(cx+cw/2,sy+50,28,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;
-    ctx.fillStyle=c.col||'#fff';ctx.font='bold 26px Courier New';ctx.textAlign='center';
-    ctx.fillText(c.icon,cx+cw/2,sy+60);ctx.fillStyle='#fff';ctx.font='bold 13px Courier New';
-    ctx.fillText(c.name,cx+cw/2,sy+95);ctx.fillStyle='#aaaacc';ctx.font='12px Courier New';
-    const maxW2=cw-20;let line='',lines=[];
-    for(const ch2 of c.desc){const test=line+ch2;if(ctx.measureText(test).width>maxW2){lines.push(line);line=ch2;}else line=test;}
-    if(line)lines.push(line);lines.forEach((l,li)=>ctx.fillText(l,cx+cw/2,sy+118+li*16));
-    ctx.fillStyle=hover?'#ffdd44':'#445588';ctx.font='11px Courier New';ctx.fillText('点击选择',cx+cw/2,sy+ch-12);});
+  ctx.fillStyle='#ffdd44';ctx.font=`bold ${fs(22)}px Courier New`;ctx.textAlign='center';
+  ctx.shadowBlur=20;ctx.shadowColor='#ffaa00';
+  const p=portrait();
+  if(p){
+    ctx.fillText('✦ 升级! ✦',W/2,H*0.08);ctx.shadowBlur=0;
+    const cw=W*0.85,ch=H*0.18,gap=H*0.03;
+    const total=ch*3+gap*2;
+    const sx=(W-cw)/2,baseY=(H-total)/2;
+    upgradeChoices.forEach((c,i)=>{const cy=baseY+i*(ch+gap);
+      const hover=mouse.x>=sx&&mouse.x<=sx+cw&&mouse.y>=cy&&mouse.y<=cy+ch;
+      ctx.fillStyle=hover?'#252550':'#14143a';ctx.strokeStyle=hover?c.col||'#6688cc':'#3344aa';
+      ctx.lineWidth=hover?2.5:1.5;roundRect(sx,cy,cw,ch,10);ctx.fill();ctx.stroke();
+      ctx.fillStyle=c.col||'#fff';ctx.font=`bold ${fs(22)}px Courier New`;ctx.textAlign='left';
+      ctx.fillText(c.icon,sx+cw*0.06,cy+ch*0.45);
+      ctx.fillStyle='#fff';ctx.font=`bold ${fs(14)}px Courier New`;
+      ctx.fillText(c.name,sx+cw*0.2,cy+ch*0.35);
+      ctx.fillStyle='#aaaacc';ctx.font=`${fs(11)}px Courier New`;
+      ctx.fillText(c.desc,sx+cw*0.2,cy+ch*0.65);
+      ctx.textAlign='center';
+      ctx.fillStyle=hover?'#ffdd44':'#445588';ctx.font=`${fs(10)}px Courier New`;ctx.fillText('点击选择',sx+cw/2,cy+ch-fs(6));
+    });
+  } else {
+    ctx.fillText('✦ 升级! 选择一项强化 ✦',W/2,H*0.12);ctx.shadowBlur=0;
+    const cw=W*0.18,ch=H*0.42,gap=W*0.025,total=cw*3+gap*2;
+    const sx=(W-total)/2,sy=(H-ch)/2;
+    upgradeChoices.forEach((c,i)=>{const cx=sx+i*(cw+gap);
+      const hover=mouse.x>=cx&&mouse.x<=cx+cw&&mouse.y>=sy&&mouse.y<=sy+ch;
+      ctx.fillStyle=hover?'#252550':'#14143a';ctx.strokeStyle=hover?c.col||'#6688cc':'#3344aa';
+      ctx.lineWidth=hover?2.5:1.5;roundRect(cx,sy,cw,ch,10);ctx.fill();ctx.stroke();
+      ctx.fillStyle=c.col||'#6688cc';ctx.globalAlpha=0.25;
+      ctx.beginPath();ctx.arc(cx+cw/2,sy+ch*0.2,fs(24),0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;
+      ctx.fillStyle=c.col||'#fff';ctx.font=`bold ${fs(22)}px Courier New`;ctx.textAlign='center';
+      ctx.fillText(c.icon,cx+cw/2,sy+ch*0.25);ctx.fillStyle='#fff';ctx.font=`bold ${fs(12)}px Courier New`;
+      ctx.fillText(c.name,cx+cw/2,sy+ch*0.4);ctx.fillStyle='#aaaacc';ctx.font=`${fs(11)}px Courier New`;
+      const maxW2=cw-20;let line='',lines=[];
+      for(const ch2 of c.desc){const test=line+ch2;if(ctx.measureText(test).width>maxW2){lines.push(line);line=ch2;}else line=test;}
+      if(line)lines.push(line);lines.forEach((l,li)=>ctx.fillText(l,cx+cw/2,sy+ch*0.5+li*fs(14)));
+      ctx.fillStyle=hover?'#ffdd44':'#445588';ctx.font=`${fs(10)}px Courier New`;ctx.fillText('点击选择',cx+cw/2,sy+ch-fs(10));
+    });
+  }
 }
 
 function drawTitle(){
   ctx.fillStyle='#080812';ctx.fillRect(0,0,W,H);const t=Date.now()/1000;
   ctx.fillStyle='rgba(255,255,255,0.7)';
   for(let i=0;i<80;i++){const bx=((i*137+50)%W),by=((i*91+30)%H),sz=.5+Math.sin(t+i)*.5;ctx.beginPath();ctx.arc(bx,by,sz,0,Math.PI*2);ctx.fill();}
-  ctx.textAlign='center';ctx.font='bold 48px Courier New';ctx.fillStyle='#44aaff';ctx.shadowBlur=30;ctx.shadowColor='#2288ff';
-  ctx.fillText('Souler 魔法特遣队',W/2,160);ctx.shadowBlur=0;
-  ctx.font='16px Courier New';ctx.fillStyle='#8888aa';ctx.fillText('Souler Magic Task Force',W/2,200);
-  ctx.fillStyle='#aaaacc';ctx.font='14px Courier New';
-  ['选择角色和地图，消灭怪物升级技能','击败BOSS通关解锁新角色和地图','收集晶石，挑战8张独特地图!'].forEach((l,i)=>ctx.fillText(l,W/2,280+i*28));
-  if(Math.floor(Date.now()/550)%2===0){ctx.fillStyle='#ffdd44';ctx.font='bold 20px Courier New';ctx.shadowBlur=10;ctx.shadowColor='#ffaa00';ctx.fillText('点击屏幕 开始',W/2,420);ctx.shadowBlur=0;}
+  ctx.textAlign='center';
+  ctx.font=`bold ${fs(portrait()?32:42)}px Courier New`;ctx.fillStyle='#44aaff';ctx.shadowBlur=30;ctx.shadowColor='#2288ff';
+  ctx.fillText('Souler',W/2,H*0.2);
+  ctx.font=`bold ${fs(portrait()?22:30)}px Courier New`;
+  ctx.fillText('魔法特遣队',W/2,H*0.2+fs(36));ctx.shadowBlur=0;
+  ctx.font=`${fs(13)}px Courier New`;ctx.fillStyle='#8888aa';ctx.fillText('Souler Magic Task Force',W/2,H*0.2+fs(56));
+  ctx.fillStyle='#aaaacc';ctx.font=`${fs(12)}px Courier New`;
+  const lines=['选择角色和地图，消灭怪物升级技能','击败BOSS通关解锁新角色和地图','收集晶石，挑战8张独特地图!'];
+  lines.forEach((l,i)=>ctx.fillText(l,W/2,H*0.48+i*fs(22)));
+  if(Math.floor(Date.now()/550)%2===0){ctx.fillStyle='#ffdd44';ctx.font=`bold ${fs(18)}px Courier New`;ctx.shadowBlur=10;ctx.shadowColor='#ffaa00';ctx.fillText('点击屏幕 开始',W/2,H*0.72);ctx.shadowBlur=0;}
 }
 function drawCharSelect(){
   ctx.fillStyle='#080812';ctx.fillRect(0,0,W,H);ctx.textAlign='center';
-  ctx.font='bold 30px Courier New';ctx.fillStyle='#44aaff';ctx.shadowBlur=20;ctx.shadowColor='#2288ff';ctx.fillText('选择角色',W/2,60);ctx.shadowBlur=0;
-  ctx.fillStyle='#88ddff';ctx.font='14px Courier New';ctx.fillText(`晶石: ${save.crystals}`,W/2,90);
-  const chars=Object.entries(CHARACTERS);const cw=140,ch=180,gap=16,total=cw*chars.length+gap*(chars.length-1);const sx=(W-total)/2,sy=120;
-  chars.forEach(([key,c],i)=>{const cx=sx+i*(cw+gap);const unlocked=save.unlockedChars.includes(key);
-    const hover=unlocked&&mouse.x>=cx&&mouse.x<=cx+cw&&mouse.y>=sy&&mouse.y<=sy+ch;
+  ctx.font=`bold ${fs(26)}px Courier New`;ctx.fillStyle='#44aaff';ctx.shadowBlur=20;ctx.shadowColor='#2288ff';ctx.fillText('选择角色',W/2,H*0.06+fs(20));ctx.shadowBlur=0;
+  ctx.fillStyle='#88ddff';ctx.font=`${fs(12)}px Courier New`;ctx.fillText(`晶石: ${save.crystals}`,W/2,H*0.06+fs(40));
+  const {chars,cols,cw,ch,gap,baseX,baseY}=charSelectLayout();
+  chars.forEach(([key,c],i)=>{
+    const row=Math.floor(i/cols),col=i%cols;
+    const cx=baseX+col*(cw+gap),cy=baseY+row*(ch+gap);
+    const unlocked=save.unlockedChars.includes(key);
+    const hover=unlocked&&mouse.x>=cx&&mouse.x<=cx+cw&&mouse.y>=cy&&mouse.y<=cy+ch;
     ctx.fillStyle=unlocked?(hover?'#1a2244':'#0e1230'):'#0a0a15';ctx.strokeStyle=unlocked?(hover?c.glowCol:'#334466'):'#222233';
-    ctx.lineWidth=hover?2.5:1.5;roundRect(cx,sy,cw,ch,10);ctx.fill();ctx.stroke();
+    ctx.lineWidth=hover?2.5:1.5;roundRect(cx,cy,cw,ch,10);ctx.fill();ctx.stroke();
+    const imgSz=Math.min(cw*0.4,ch*0.35);
     const img=charImages[c.imgKey];
-    if(img&&unlocked){ctx.save();ctx.shadowBlur=0;ctx.shadowColor='transparent';ctx.globalAlpha=1;ctx.filter='none';ctx.globalCompositeOperation='source-over';ctx.drawImage(img,cx+cw/2-28,sy+12,56,56);ctx.restore();}
-    else{ctx.fillStyle=unlocked?c.glowCol:'#333';ctx.beginPath();ctx.arc(cx+cw/2,sy+40,22,0,Math.PI*2);ctx.fill();}
-    ctx.fillStyle=unlocked?'#fff':'#555';ctx.font='bold 14px Courier New';ctx.fillText(c.name,cx+cw/2,sy+86);
-    ctx.fillStyle=unlocked?c.glowCol:'#444';ctx.font='11px Courier New';ctx.fillText(c.cls,cx+cw/2,sy+104);
-    if(unlocked){ctx.fillStyle='#aaa';ctx.font='11px Courier New';ctx.fillText(c.desc,cx+cw/2,sy+122);
-      const sk=SKILLS[c.startSkill];if(sk){ctx.fillStyle=sk.color;ctx.font='10px Courier New';ctx.fillText(`${sk.icon} ${sk.name}`,cx+cw/2,sy+140);}}
-    else{ctx.fillStyle='#555';ctx.font='11px Courier New';ctx.fillText(`通关${MAPS[c.unlockMap].name}解锁`,cx+cw/2,sy+130);}
-    if(hover){ctx.fillStyle='#ffdd44';ctx.font='11px Courier New';ctx.fillText('点击选择',cx+cw/2,sy+ch-10);}});
+    if(img&&unlocked){ctx.save();ctx.shadowBlur=0;ctx.shadowColor='transparent';ctx.globalAlpha=1;ctx.filter='none';ctx.globalCompositeOperation='source-over';ctx.drawImage(img,cx+cw/2-imgSz/2,cy+ch*0.06,imgSz,imgSz);ctx.restore();}
+    else{ctx.fillStyle=unlocked?c.glowCol:'#333';ctx.beginPath();ctx.arc(cx+cw/2,cy+ch*0.06+imgSz/2,imgSz*0.38,0,Math.PI*2);ctx.fill();}
+    const ty=cy+ch*0.06+imgSz+fs(14);
+    ctx.fillStyle=unlocked?'#fff':'#555';ctx.font=`bold ${fs(13)}px Courier New`;ctx.fillText(c.name,cx+cw/2,ty);
+    ctx.fillStyle=unlocked?c.glowCol:'#444';ctx.font=`${fs(10)}px Courier New`;ctx.fillText(c.cls,cx+cw/2,ty+fs(14));
+    if(unlocked){ctx.fillStyle='#aaa';ctx.font=`${fs(9)}px Courier New`;ctx.fillText(c.desc,cx+cw/2,ty+fs(26));
+      const sk=SKILLS[c.startSkill];if(sk){ctx.fillStyle=sk.color;ctx.font=`${fs(9)}px Courier New`;ctx.fillText(`${sk.icon} ${sk.name}`,cx+cw/2,ty+fs(38));}}
+    else{ctx.fillStyle='#555';ctx.font=`${fs(9)}px Courier New`;ctx.fillText(`通关${MAPS[c.unlockMap].name}`,cx+cw/2,ty+fs(26));ctx.fillText('解锁',cx+cw/2,ty+fs(38));}
+    if(hover){ctx.fillStyle='#ffdd44';ctx.font=`${fs(10)}px Courier New`;ctx.fillText('点击选择',cx+cw/2,cy+ch-fs(6));}
+  });
 }
 function drawMapSelect(){
   ctx.fillStyle='#080812';ctx.fillRect(0,0,W,H);ctx.textAlign='center';
   const c=CHARACTERS[selectedCharKey];
-  ctx.font='bold 26px Courier New';ctx.fillStyle='#44aaff';ctx.shadowBlur=15;ctx.shadowColor='#2288ff';ctx.fillText('选择地图',W/2,50);ctx.shadowBlur=0;
-  ctx.fillStyle='#aaa';ctx.font='13px Courier New';ctx.fillText(`角色: ${c.name} (${c.cls})    晶石: ${save.crystals}`,W/2,78);
-  const cols=4,cw=180,ch=100,gap=16,totalW=cw*cols+gap*(cols-1),baseX=(W-totalW)/2,baseY=100;
+  ctx.font=`bold ${fs(22)}px Courier New`;ctx.fillStyle='#44aaff';ctx.shadowBlur=15;ctx.shadowColor='#2288ff';ctx.fillText('选择地图',W/2,H*0.05+fs(18));ctx.shadowBlur=0;
+  ctx.fillStyle='#aaa';ctx.font=`${fs(11)}px Courier New`;ctx.fillText(`${c.name}(${c.cls})  晶石:${save.crystals}`,W/2,H*0.05+fs(36));
+  const {cols,cw,ch,gap,baseX,baseY}=mapSelectLayout();
   MAPS.forEach((m,i)=>{const row=Math.floor(i/cols),col=i%cols;
     const cx=baseX+col*(cw+gap),cy=baseY+row*(ch+gap);
     const unlocked=i===0||save.clearedMaps.includes(i-1);const cleared=save.clearedMaps.includes(i);
     const hover=unlocked&&mouse.x>=cx&&mouse.x<=cx+cw&&mouse.y>=cy&&mouse.y<=cy+ch;
     ctx.fillStyle=unlocked?(hover?'#1a2244':'#0e1230'):'#0a0a15';ctx.strokeStyle=unlocked?(hover?m.wallCol:'#334466'):'#222233';
     ctx.lineWidth=hover?2.5:1.5;roundRect(cx,cy,cw,ch,8);ctx.fill();ctx.stroke();
-    ctx.fillStyle=unlocked?'#fff':'#555';ctx.font='bold 16px Courier New';ctx.fillText(`${i+1}. ${m.name}`,cx+cw/2,cy+24);
-    if(unlocked){ctx.fillStyle='#aaa';ctx.font='11px Courier New';ctx.fillText(`BOSS: ${m.bossName}`,cx+cw/2,cy+44);
-      ctx.fillStyle='#88ddff';ctx.fillText(`时长${m.twoBoss?'10分钟':'3分钟'}  奖励${m.crystals}晶石`,cx+cw/2,cy+60);
-      if(cleared){ctx.fillStyle='#44ff44';ctx.font='bold 12px Courier New';ctx.fillText('已通关 ✓',cx+cw/2,cy+80);}
-      else if(hover){ctx.fillStyle='#ffdd44';ctx.font='11px Courier New';ctx.fillText('点击开始',cx+cw/2,cy+80);}}
-    else{ctx.fillStyle='#555';ctx.font='11px Courier New';ctx.fillText('通关前一关解锁',cx+cw/2,cy+50);}});
-  ctx.fillStyle='#334466';roundRect(20,H-50,100,30,6);ctx.fill();
-  ctx.fillStyle='#aaa';ctx.font='13px Courier New';ctx.textAlign='center';ctx.fillText('← 返回',70,H-30);
+    ctx.fillStyle=unlocked?'#fff':'#555';ctx.font=`bold ${fs(13)}px Courier New`;ctx.fillText(`${i+1}.${m.name}`,cx+cw/2,cy+ch*0.25);
+    if(unlocked){ctx.fillStyle='#aaa';ctx.font=`${fs(9)}px Courier New`;ctx.fillText(`BOSS:${m.bossName}`,cx+cw/2,cy+ch*0.48);
+      ctx.fillStyle='#88ddff';ctx.fillText(`${m.twoBoss?'10分':'3分'} ${m.crystals}晶`,cx+cw/2,cy+ch*0.68);
+      if(cleared){ctx.fillStyle='#44ff44';ctx.font=`bold ${fs(10)}px Courier New`;ctx.fillText('已通关✓',cx+cw/2,cy+ch*0.88);}
+      else if(hover){ctx.fillStyle='#ffdd44';ctx.font=`${fs(9)}px Courier New`;ctx.fillText('点击开始',cx+cw/2,cy+ch*0.88);}}
+    else{ctx.fillStyle='#555';ctx.font=`${fs(9)}px Courier New`;ctx.fillText('通关前一关解锁',cx+cw/2,cy+ch*0.55);}});
+  const bw=W*0.2,bh=H*0.05;
+  ctx.fillStyle='#334466';roundRect(W*0.02,H-bh-H*0.02,bw,bh,6);ctx.fill();
+  ctx.fillStyle='#aaa';ctx.font=`${fs(12)}px Courier New`;ctx.textAlign='center';ctx.fillText('← 返回',W*0.02+bw/2,H-H*0.02-bh*0.25);
 }
 function drawGameOver(){
   ctx.fillStyle='rgba(0,0,0,0.88)';ctx.fillRect(0,0,W,H);ctx.textAlign='center';
-  ctx.font='bold 48px Courier New';ctx.fillStyle='#ff3344';ctx.shadowBlur=25;ctx.shadowColor='#ff0000';ctx.fillText('任务失败',W/2,180);ctx.shadowBlur=0;
-  ctx.fillStyle='#fff';ctx.font='20px Courier New';
-  ctx.fillText(`地图: ${MAPS[selectedMapIdx].name}`,W/2,240);ctx.fillText(`存活时间: ${Math.floor(gameTime)}秒`,W/2,274);
-  ctx.fillText(`最终分数: ${score}`,W/2,308);ctx.fillText(`达到等级: ${player.level}`,W/2,342);
-  if(Math.floor(Date.now()/550)%2===0){ctx.fillStyle='#aaaacc';ctx.font='bold 18px Courier New';ctx.fillText('点击返回角色选择',W/2,430);}
+  ctx.font=`bold ${fs(40)}px Courier New`;ctx.fillStyle='#ff3344';ctx.shadowBlur=25;ctx.shadowColor='#ff0000';ctx.fillText('任务失败',W/2,H*0.25);ctx.shadowBlur=0;
+  ctx.fillStyle='#fff';ctx.font=`${fs(16)}px Courier New`;
+  const lh=fs(28);
+  ctx.fillText(`地图: ${MAPS[selectedMapIdx].name}`,W/2,H*0.38);
+  ctx.fillText(`存活时间: ${Math.floor(gameTime)}秒`,W/2,H*0.38+lh);
+  ctx.fillText(`最终分数: ${score}`,W/2,H*0.38+lh*2);
+  ctx.fillText(`达到等级: ${player.level}`,W/2,H*0.38+lh*3);
+  if(Math.floor(Date.now()/550)%2===0){ctx.fillStyle='#aaaacc';ctx.font=`bold ${fs(16)}px Courier New`;ctx.fillText('点击返回角色选择',W/2,H*0.75);}
 }
 function drawVictory(){
   ctx.fillStyle='rgba(0,0,20,0.92)';ctx.fillRect(0,0,W,H);const t=Date.now()/1000;
-  ctx.save();for(let i=0;i<12;i++){const a=i/12*Math.PI*2+t*0.3,len=120+Math.sin(t*2+i)*30;
-    ctx.strokeStyle=`rgba(255,220,50,${0.2+Math.sin(t+i)*0.15})`;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(W/2,H/2-60);ctx.lineTo(W/2+Math.cos(a)*len,H/2-60+Math.sin(a)*len);ctx.stroke();}ctx.restore();
-  ctx.textAlign='center';ctx.font='bold 52px Courier New';ctx.fillStyle='#ffdd44';ctx.shadowBlur=40;ctx.shadowColor='#ffaa00';ctx.fillText('任务完成!',W/2,180);ctx.shadowBlur=0;
-  ctx.font='20px Courier New';ctx.fillStyle='#aaddff';ctx.fillText(`${MAPS[selectedMapIdx].name} 通关!`,W/2,230);
-  ctx.fillStyle='#fff';ctx.font='18px Courier New';ctx.fillText(`最终分数: ${score}`,W/2,275);ctx.fillText(`最终等级: ${player.level}`,W/2,305);
-  ctx.fillStyle='#88ddff';ctx.font='bold 20px Courier New';ctx.fillText(`获得晶石: +${sessionCrystals}`,W/2,350);
+  const rad=Math.min(W,H)*0.18;
+  ctx.save();for(let i=0;i<12;i++){const a=i/12*Math.PI*2+t*0.3,len=rad+Math.sin(t*2+i)*rad*0.25;
+    ctx.strokeStyle=`rgba(255,220,50,${0.2+Math.sin(t+i)*0.15})`;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(W/2,H*0.22);ctx.lineTo(W/2+Math.cos(a)*len,H*0.22+Math.sin(a)*len);ctx.stroke();}ctx.restore();
+  ctx.textAlign='center';ctx.font=`bold ${fs(40)}px Courier New`;ctx.fillStyle='#ffdd44';ctx.shadowBlur=40;ctx.shadowColor='#ffaa00';ctx.fillText('任务完成!',W/2,H*0.25);ctx.shadowBlur=0;
+  const lh=fs(26);
+  ctx.font=`${fs(16)}px Courier New`;ctx.fillStyle='#aaddff';ctx.fillText(`${MAPS[selectedMapIdx].name} 通关!`,W/2,H*0.35);
+  ctx.fillStyle='#fff';ctx.font=`${fs(14)}px Courier New`;ctx.fillText(`最终分数: ${score}`,W/2,H*0.35+lh);ctx.fillText(`最终等级: ${player.level}`,W/2,H*0.35+lh*2);
+  ctx.fillStyle='#88ddff';ctx.font=`bold ${fs(16)}px Courier New`;ctx.fillText(`获得晶石: +${sessionCrystals}`,W/2,H*0.35+lh*3);
   const newChar=Object.entries(CHARACTERS).find(([k,c2])=>c2.unlockMap===selectedMapIdx&&save.unlockedChars.includes(k));
-  if(newChar){ctx.fillStyle='#ffaa44';ctx.font='bold 18px Courier New';ctx.fillText(`解锁新角色: ${newChar[1].name}!`,W/2,390);}
-  if(Math.floor(Date.now()/550)%2===0){ctx.fillStyle='#aaaacc';ctx.font='bold 18px Courier New';ctx.fillText('点击返回角色选择',W/2,460);}
+  if(newChar){ctx.fillStyle='#ffaa44';ctx.font=`bold ${fs(14)}px Courier New`;ctx.fillText(`解锁新角色: ${newChar[1].name}!`,W/2,H*0.35+lh*4.5);}
+  if(Math.floor(Date.now()/550)%2===0){ctx.fillStyle='#aaaacc';ctx.font=`bold ${fs(14)}px Courier New`;ctx.fillText('点击返回角色选择',W/2,H*0.78);}
 }
 
 // ── main loop ────────────────────────────────────────────────────────
@@ -1220,7 +1327,7 @@ function draw(){
   if(state==='playing'||state==='levelup') player.draw();
   for(const p of particles) p.draw();
   drawLightning();
-  for(const d of damageNums){const sx=d.x-camera.x,sy=d.y-camera.y;ctx.save();ctx.globalAlpha=clamp(d.life/d.maxL,0,1);ctx.fillStyle='#ffee22';ctx.font='bold 13px Courier New';ctx.textAlign='center';ctx.fillText(d.v,sx,sy);ctx.restore();}
+  for(const d of damageNums){const sx=d.x-camera.x,sy=d.y-camera.y;ctx.save();ctx.globalAlpha=clamp(d.life/d.maxL,0,1);ctx.fillStyle='#ffee22';ctx.font=`bold ${fs(12)}px Courier New`;ctx.textAlign='center';ctx.fillText(d.v,sx,sy);ctx.restore();}
   drawHUD(); drawBossBar(); drawRoundBanner(); drawJoystick();
   if(state==='levelup') drawLevelUpScreen();
   if(state==='gameover') drawGameOver();
